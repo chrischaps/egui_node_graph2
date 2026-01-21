@@ -692,11 +692,18 @@ where
 
         child_ui.vertical(|ui| {
             ui.horizontal(|ui| {
-                ui.add(Label::new(
-                    RichText::new(&self.graph[self.node_id].label)
-                        .text_style(TextStyle::Button)
-                        .color(text_color),
-                ));
+                // Draw node label directly with painter to avoid intercepting mouse events
+                // This allows dragging the node by clicking on the title text
+                let label_text = &self.graph[self.node_id].label;
+                let font_id = TextStyle::Button.resolve(ui.style());
+                let galley = ui.painter().layout_no_wrap(
+                    label_text.to_string(),
+                    font_id,
+                    text_color,
+                );
+                let label_rect = ui.allocate_space(galley.size()).1;
+                ui.painter().galley(label_rect.min, galley, text_color);
+
                 responses.extend(self.graph[self.node_id].user_data.top_bar_ui(
                     ui,
                     self.node_id,
