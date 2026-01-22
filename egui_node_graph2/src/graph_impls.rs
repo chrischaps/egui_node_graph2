@@ -229,6 +229,16 @@ impl<NodeData, DataType, ValueType> Graph<NodeData, DataType, ValueType> {
     pub fn get_output(&self, output: OutputId) -> &OutputParam<DataType> {
         &self.outputs[output]
     }
+
+    /// Get the index of an output port within its node's output list.
+    /// Returns None if the output doesn't exist.
+    pub fn get_output_index(&self, output: OutputId) -> Option<usize> {
+        let output_param = self.outputs.get(output)?;
+        let node = self.nodes.get(output_param.node)?;
+        node.outputs
+            .iter()
+            .position(|(_, id)| *id == output)
+    }
 }
 
 impl<NodeData, DataType, ValueType> Default for Graph<NodeData, DataType, ValueType> {

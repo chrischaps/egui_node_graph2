@@ -123,6 +123,7 @@ where
     >,
     DataType: DataTypeTrait<UserState>,
     CategoryType: CategoryTrait,
+    UserState: ConnectionSignalTrait,
 {
     #[must_use]
     pub fn draw_graph_editor(
@@ -386,10 +387,17 @@ where
                 src_pos,
                 dst_pos,
                 connection_color,
+                0.0, // No animation for in-progress connections
+                None, // No signal level for in-progress connections
             );
         }
 
-        // draw existing connections
+        // Get animation time for flowing cable effect
+        let anim_time = ui.ctx().input(|i| i.time);
+        // Request continuous repaint for animation
+        ui.ctx().request_repaint();
+
+        // draw existing connections with signal-driven animation
         for (input, outputs) in self.graph.iter_connection_groups() {
             for (hook_n, &output) in outputs.iter().enumerate() {
                 let port_type = self
@@ -400,12 +408,22 @@ where
                 // outputs can't be wide yet so this is fine.
                 let src_pos = port_locations[&AnyParameterId::Output(output)][0];
                 let dst_pos = conn_locations[&input][hook_n];
+
+                // Look up signal level for this output port
+                let output_param = self.graph.get_output(output);
+                let output_index = self.graph.get_output_index(output);
+                let signal_level = output_index.and_then(|idx| {
+                    user_state.get_output_signal_level(output_param.node, idx)
+                });
+
                 draw_connection(
                     &self.pan_zoom,
                     ui.painter(),
                     src_pos,
                     dst_pos,
                     connection_color,
+                    anim_time,
+                    signal_level,
                 );
             }
         }
@@ -566,15 +584,77 @@ where
     }
 }
 
+/// Cable animation configuration
+mod cable_anim {
+    /// Base speed of the flowing animation (cycles per second)
+    pub const BASE_FLOW_SPEED: f64 = 0.5;
+    /// Maximum speed multiplier for high signal levels
+    pub const MAX_SPEED_MULTIPLIER: f64 = 2.5;
+    /// Spacing between dots in pixels (determines dot density)
+    pub const DOT_SPACING: f32 = 25.0;
+    /// Minimum number of dots per cable
+    pub const MIN_DOT_COUNT: usize = 3;
+    /// Maximum number of dots per cable (to avoid performance issues on very long cables)
+    pub const MAX_DOT_COUNT: usize = 30;
+    /// Size of each flowing dot relative to cable width
+    pub const DOT_SIZE_RATIO: f32 = 1.0;
+    /// Maximum alpha of the flowing dots (0-255)
+    pub const MAX_DOT_ALPHA: u8 = 255;
+    /// Minimum alpha when signal is very low (0-255)
+    pub const MIN_DOT_ALPHA: u8 = 100;
+    /// Minimum cable length to show animation (avoid clutter on short cables)
+    pub const MIN_LENGTH_FOR_ANIM: f32 = 40.0;
+    /// Signal threshold below which animation is disabled (for gate-like behavior)
+    pub const SIGNAL_THRESHOLD: f32 = 0.01;
+    /// Color brightness boost for dots (added to RGB channels)
+    pub const COLOR_BOOST: u8 = 100;
+    /// Glow width multiplier (how much wider the glow is than the cable)
+    pub const GLOW_WIDTH_MULTIPLIER: f32 = 2.0;
+    /// Maximum glow alpha at full signal (0-255)
+    pub const MAX_GLOW_ALPHA: u8 = 80;
+    /// Minimum glow alpha (always visible base glow) (0-255)
+    pub const MIN_GLOW_ALPHA: u8 = 20;
+}
+
+/// Evaluate a cubic bezier curve at parameter t (0.0 to 1.0)
+fn cubic_bezier_point(p0: Pos2, p1: Pos2, p2: Pos2, p3: Pos2, t: f32) -> Pos2 {
+    let t2 = t * t;
+    let t3 = t2 * t;
+    let mt = 1.0 - t;
+    let mt2 = mt * mt;
+    let mt3 = mt2 * mt;
+
+    Pos2::new(
+        mt3 * p0.x + 3.0 * mt2 * t * p1.x + 3.0 * mt * t2 * p2.x + t3 * p3.x,
+        mt3 * p0.y + 3.0 * mt2 * t * p1.y + 3.0 * mt * t2 * p2.y + t3 * p3.y,
+    )
+}
+
+/// Approximate the arc length of a cubic bezier curve by sampling points
+fn approx_bezier_length(p0: Pos2, p1: Pos2, p2: Pos2, p3: Pos2, samples: usize) -> f32 {
+    let mut length = 0.0;
+    let mut prev = p0;
+    for i in 1..=samples {
+        let t = i as f32 / samples as f32;
+        let curr = cubic_bezier_point(p0, p1, p2, p3, t);
+        length += prev.distance(curr);
+        prev = curr;
+    }
+    length
+}
+
 fn draw_connection(
     pan_zoom: &PanZoom,
     painter: &Painter,
     src_pos: Pos2,
     dst_pos: Pos2,
     color: Color32,
+    anim_time: f64,
+    signal_level: Option<f32>,
 ) {
+    let cable_width = 5.0 * pan_zoom.zoom;
     let connection_stroke = egui::Stroke {
-        width: 5.0 * pan_zoom.zoom,
+        width: cable_width,
         color,
     };
 
@@ -582,14 +662,107 @@ fn draw_connection(
     let src_control = src_pos + Vec2::X * control_scale;
     let dst_control = dst_pos - Vec2::X * control_scale;
 
+    // Draw glow effect (behind the cable) based on signal level
+    if let Some(signal) = signal_level {
+        let abs_signal = signal.abs();
+        if abs_signal > cable_anim::SIGNAL_THRESHOLD {
+            // Glow intensity scales with signal level
+            let intensity = abs_signal.clamp(0.0, 1.0);
+            let alpha_range = cable_anim::MAX_GLOW_ALPHA - cable_anim::MIN_GLOW_ALPHA;
+            let glow_alpha = cable_anim::MIN_GLOW_ALPHA + (alpha_range as f32 * intensity) as u8;
+
+            let glow_width = cable_width * cable_anim::GLOW_WIDTH_MULTIPLIER;
+            let glow_color = Color32::from_rgba_unmultiplied(
+                color.r(),
+                color.g(),
+                color.b(),
+                glow_alpha,
+            );
+            let glow_stroke = egui::Stroke {
+                width: glow_width,
+                color: glow_color,
+            };
+
+            let glow_bezier = CubicBezierShape::from_points_stroke(
+                [src_pos, src_control, dst_control, dst_pos],
+                false,
+                Color32::TRANSPARENT,
+                glow_stroke,
+            );
+            painter.add(glow_bezier);
+        }
+    }
+
+    // Draw the base cable
     let bezier = CubicBezierShape::from_points_stroke(
         [src_pos, src_control, dst_control, dst_pos],
         false,
         Color32::TRANSPARENT,
         connection_stroke,
     );
-
     painter.add(bezier);
+
+    // Calculate actual bezier arc length for consistent dot density
+    let arc_length = approx_bezier_length(src_pos, src_control, dst_control, dst_pos, 16);
+
+    // Draw flowing animation dots based on signal level
+    if arc_length > cable_anim::MIN_LENGTH_FOR_ANIM * pan_zoom.zoom {
+        // Get signal value - keep sign for direction, use abs for intensity
+        let signal = signal_level.unwrap_or(0.0);
+        let abs_signal = signal.abs();
+
+        // Only animate if signal is above threshold (or if no signal data available for fallback)
+        let should_animate = signal_level.is_none() || abs_signal > cable_anim::SIGNAL_THRESHOLD;
+
+        if should_animate {
+            // Calculate animation intensity based on signal level
+            // If no signal data, use a default medium intensity
+            let intensity = if signal_level.is_some() {
+                // Clamp signal to 0-1 range for intensity calculation
+                abs_signal.clamp(0.0, 1.0)
+            } else {
+                0.5 // Default intensity when no signal feedback available
+            };
+
+            // Determine flow direction: positive = forward (src->dst), negative = reverse (dst->src)
+            let flow_direction = if signal_level.is_some() && signal < 0.0 { -1.0 } else { 1.0 };
+
+            // Speed scales with signal level
+            let speed_multiplier = 1.0 + (cable_anim::MAX_SPEED_MULTIPLIER - 1.0) * intensity as f64;
+            let flow_speed = cable_anim::BASE_FLOW_SPEED * speed_multiplier * flow_direction;
+
+            // Calculate phase based on time (0.0 to 1.0, looping)
+            // Use modulo to handle negative phase from reverse flow
+            let phase = (anim_time * flow_speed).rem_euclid(1.0);
+
+            // Alpha scales with signal level
+            let alpha_range = cable_anim::MAX_DOT_ALPHA - cable_anim::MIN_DOT_ALPHA;
+            let dot_alpha = cable_anim::MIN_DOT_ALPHA + (alpha_range as f32 * intensity) as u8;
+
+            // Calculate dot count based on cable length for consistent density
+            let dot_count = ((arc_length / (cable_anim::DOT_SPACING * pan_zoom.zoom)) as usize)
+                .clamp(cable_anim::MIN_DOT_COUNT, cable_anim::MAX_DOT_COUNT);
+
+            // Draw dots flowing along the cable
+            let dot_radius = cable_width * cable_anim::DOT_SIZE_RATIO * 0.5;
+            let dot_color = Color32::from_rgba_unmultiplied(
+                color.r().saturating_add(cable_anim::COLOR_BOOST),
+                color.g().saturating_add(cable_anim::COLOR_BOOST),
+                color.b().saturating_add(cable_anim::COLOR_BOOST),
+                dot_alpha,
+            );
+
+            for i in 0..dot_count {
+                // Spread dots evenly along the cable, offset by phase
+                let t = ((i as f64 / dot_count as f64) + phase).rem_euclid(1.0) as f32;
+
+                // Sample point on the bezier curve
+                let point = cubic_bezier_point(src_pos, src_control, dst_control, dst_pos, t);
+
+                painter.circle_filled(point, dot_radius, dot_color);
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

@@ -286,3 +286,26 @@ pub trait NodeTemplateTrait: Clone {
 /// The custom user response types when drawing nodes in the graph must
 /// implement this trait.
 pub trait UserResponseTrait: Clone + std::fmt::Debug {}
+
+/// Optional trait for providing signal level feedback for cable animations.
+///
+/// Implement this trait on your UserState to enable signal-driven cable animations
+/// where the animation intensity reflects the actual signal level on each connection.
+///
+/// If not implemented (using the default implementation), cables will animate
+/// continuously without signal feedback.
+pub trait ConnectionSignalTrait {
+    /// Get the signal level for an output port, used for cable animation.
+    ///
+    /// Returns a value typically in the range 0.0 to 1.0 (or -1.0 to 1.0 for bipolar signals).
+    /// The absolute value is used to determine animation intensity.
+    ///
+    /// Parameters:
+    /// - `node_id`: The graph NodeId of the node containing the output
+    /// - `output_index`: The index of the output port within the node
+    ///
+    /// Returns None if no signal data is available (animation will be disabled for this connection).
+    fn get_output_signal_level(&self, _node_id: NodeId, _output_index: usize) -> Option<f32> {
+        None
+    }
+}
