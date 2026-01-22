@@ -145,21 +145,9 @@ where
     where
         Self::Response: UserResponseTrait,
     {
-        // Draw right-aligned label using painter to avoid layout side effects
-        let font_id = egui::TextStyle::Body.resolve(ui.style());
-        let text_color = ui.visuals().widgets.noninteractive.fg_stroke.color;
-        let galley = ui.painter().layout_no_wrap(param_name.to_string(), font_id, text_color);
-        let text_size = galley.size();
-
-        // Allocate space for the text height (same as a normal label would)
-        let (rect, _) = ui.allocate_exact_size(
-            egui::vec2(ui.available_width(), text_size.y),
-            egui::Sense::hover(),
-        );
-
-        // Draw text right-aligned within the allocated rect
-        let text_pos = egui::pos2(rect.right() - text_size.x, rect.top());
-        ui.painter().galley(text_pos, galley, text_color);
+        // Just show a simple label - right-alignment will be handled by the node renderer
+        // which positions output ports on the right side regardless of label position
+        ui.label(param_name);
 
         Default::default()
     }

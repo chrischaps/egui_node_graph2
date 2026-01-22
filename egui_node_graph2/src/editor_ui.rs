@@ -863,7 +863,20 @@ where
         let mut input_port_heights = vec![];
         let mut output_port_heights = vec![];
 
+        // Debug flag - set to true to visualize element bounds
+        let debug_layout = false;
+        let mut debug_color_idx = 0usize;
+        let debug_colors = [
+            Color32::RED,
+            Color32::GREEN,
+            Color32::BLUE,
+            Color32::YELLOW,
+            Color32::from_rgb(255, 0, 255), // Magenta
+            Color32::LIGHT_BLUE,
+        ];
+
         child_ui.vertical(|ui| {
+            let title_rect_before = ui.min_rect();
             ui.horizontal(|ui| {
                 // Draw node label directly with painter to avoid intercepting mouse events
                 // This allows dragging the node by clicking on the title text
@@ -888,6 +901,12 @@ where
             });
             ui.add_space(margin.y);
             title_height = ui.min_size().y;
+
+            if debug_layout {
+                let title_rect_after = ui.min_rect();
+                let title_contribution = Rect::from_min_max(title_rect_before.min, pos2(title_rect_after.max.x, title_rect_after.min.y + title_height));
+                ui.painter().rect_stroke(title_contribution, 0.0, Stroke::new(2.0, debug_colors[0]));
+            }
 
             // First pass: Draw the inner fields. Compute port heights
             let inputs = self.graph[self.node_id].inputs.clone();
@@ -966,15 +985,33 @@ where
                 }
             }
 
+            // Debug: draw rect showing inputs section
+            if debug_layout {
+                let inputs_rect = ui.min_rect();
+                ui.painter().rect_stroke(inputs_rect, 0.0, Stroke::new(2.0, Color32::GREEN));
+            }
+
             let outputs = self.graph[self.node_id].outputs.clone();
+            let outputs_start_rect = ui.min_rect();
             for (param_name, param_id) in outputs {
                 let height_before = ui.min_rect().bottom();
+                let width_before = ui.min_rect().width();
                 responses.extend(
                     self.graph[self.node_id]
                         .user_data
                         .output_ui(ui, self.node_id, self.graph, user_state, &param_name)
                         .into_iter(),
                 );
+                let width_after = ui.min_rect().width();
+
+                // Debug: show if output_ui expanded width
+                if debug_layout && width_after > width_before + 1.0 {
+                    ui.painter().rect_stroke(
+                        Rect::from_min_size(pos2(outputs_start_rect.min.x, height_before), vec2(width_after, 20.0)),
+                        0.0,
+                        Stroke::new(3.0, Color32::from_rgb(255, 0, 255)), // Magenta for width expansion
+                    );
+                }
 
                 self.graph[self.node_id].user_data.separator(
                     ui,
@@ -988,6 +1025,9 @@ where
                 output_port_heights.push((height_before + height_after) / 2.0);
             }
 
+            // Debug: rect before bottom_ui
+            let bottom_ui_before = ui.min_rect();
+
             responses.extend(self.graph[self.node_id].user_data.bottom_ui(
                 ui,
                 self.node_id,
@@ -995,12 +1035,31 @@ where
                 user_state,
                 pan_zoom.zoom,
             ));
+
+            // Debug: show bottom_ui contribution
+            if debug_layout {
+                let bottom_ui_after = ui.min_rect();
+                // Draw blue rect for bottom_ui area
+                let bottom_area = Rect::from_min_max(
+                    pos2(bottom_ui_after.min.x, bottom_ui_before.max.y),
+                    bottom_ui_after.max
+                );
+                ui.painter().rect_stroke(bottom_area, 0.0, Stroke::new(2.0, Color32::BLUE));
+
+                // Draw yellow for final min_rect
+                ui.painter().rect_stroke(bottom_ui_after, 0.0, Stroke::new(1.0, Color32::YELLOW));
+            }
         });
 
         // Second pass, iterate again to draw the ports. This happens outside
         // the child_ui because we want ports to overflow the node background.
 
         let outer_rect = child_ui.min_rect().expand2(margin);
+
+        // Debug: show final outer_rect in cyan
+        if debug_layout {
+            ui.painter().rect_stroke(outer_rect, 0.0, Stroke::new(3.0, Color32::from_rgb(0, 255, 255)));
+        }
         let port_left = outer_rect.left();
         let port_right = outer_rect.right();
 
