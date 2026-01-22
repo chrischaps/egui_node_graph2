@@ -709,6 +709,7 @@ where
                     self.node_id,
                     self.graph,
                     user_state,
+                    pan_zoom.zoom,
                 ));
                 ui.add_space(8.0 * pan_zoom.zoom); // The size of the little cross icon
             });
@@ -769,8 +770,9 @@ where
                         max_connections != 1,
                         self.graph.connections(param_id).len(),
                         max_connections,
+                        pan_zoom.zoom,
                     );
-                    let margin = 5.0;
+                    let margin = 5.0 * pan_zoom.zoom;
                     let missing_space =
                         port_height - (height_intermediate - height_before) + margin;
                     if missing_space > 0.0 {
@@ -818,6 +820,7 @@ where
                 self.node_id,
                 self.graph,
                 user_state,
+                pan_zoom.zoom,
             ));
         });
 
@@ -834,14 +837,14 @@ where
                 .insert_temp(child_ui.id(), OuterRectMemory(outer_rect))
         });
 
-        fn port_height(wide_port: bool, connections: usize, max_connections: usize) -> f32 {
+        fn port_height(wide_port: bool, connections: usize, max_connections: usize, zoom: f32) -> f32 {
             let port_full = connections == max_connections;
             if wide_port {
                 let hooks = connections + if port_full { 0 } else { 1 };
 
-                5.0 + (10.0 * hooks as f32).max(10.0)
+                (5.0 + (10.0 * hooks as f32).max(10.0)) * zoom
             } else {
-                10.0
+                10.0 * zoom
             }
         }
 
@@ -870,8 +873,7 @@ where
 
             let port_rect = Rect::from_center_size(
                 port_pos,
-                egui::vec2(10.0, port_height(wide_port, connections, max_connections))
-                    * pan_zoom.zoom,
+                egui::vec2(10.0 * pan_zoom.zoom, port_height(wide_port, connections, max_connections, pan_zoom.zoom)),
             );
 
             let port_full = connections == max_connections;

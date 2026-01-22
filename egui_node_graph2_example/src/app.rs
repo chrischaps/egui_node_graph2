@@ -332,6 +332,7 @@ impl NodeDataTrait for MyNodeData {
         node_id: NodeId,
         _graph: &Graph<MyNodeData, MyDataType, MyValueType>,
         user_state: &mut Self::UserState,
+        _zoom: f32,
     ) -> Vec<NodeResponse<MyResponse, MyNodeData>>
     where
         MyResponse: UserResponseTrait,

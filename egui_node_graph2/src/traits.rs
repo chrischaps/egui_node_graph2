@@ -103,23 +103,27 @@ where
     type ValueType;
 
     /// Additional UI elements to draw in the nodes, after the parameters.
+    /// The `zoom` parameter contains the current zoom level of the graph editor.
     fn bottom_ui(
         &self,
         ui: &mut egui::Ui,
         node_id: NodeId,
         graph: &Graph<Self, Self::DataType, Self::ValueType>,
         user_state: &mut Self::UserState,
+        zoom: f32,
     ) -> Vec<NodeResponse<Self::Response, Self>>
     where
         Self::Response: UserResponseTrait;
 
     /// UI to draw on the top bar of the node.
+    /// The `zoom` parameter contains the current zoom level of the graph editor.
     fn top_bar_ui(
         &self,
         _ui: &mut egui::Ui,
         _node_id: NodeId,
         _graph: &Graph<Self, Self::DataType, Self::ValueType>,
         _user_state: &mut Self::UserState,
+        _zoom: f32,
     ) -> Vec<NodeResponse<Self::Response, Self>>
     where
         Self::Response: UserResponseTrait,
