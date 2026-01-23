@@ -310,4 +310,26 @@ pub trait ConnectionSignalTrait {
     fn get_output_signal_level(&self, _node_id: NodeId, _output_index: usize) -> Option<f32> {
         None
     }
+
+    /// Get the color for an output port, allowing signal-based visual feedback.
+    ///
+    /// This method is called when rendering output ports and allows the application
+    /// to modify the port color based on signal activity (e.g., brightening gate outputs
+    /// when they're high).
+    ///
+    /// Parameters:
+    /// - `node_id`: The graph NodeId of the node containing the output
+    /// - `output_index`: The index of the output port within the node
+    /// - `base_color`: The default color for this port's data type
+    ///
+    /// Returns the color to use for rendering the port. Default implementation
+    /// returns the base_color unchanged.
+    fn output_port_color(
+        &self,
+        _node_id: NodeId,
+        _output_index: usize,
+        base_color: egui::Color32,
+    ) -> egui::Color32 {
+        base_color
+    }
 }

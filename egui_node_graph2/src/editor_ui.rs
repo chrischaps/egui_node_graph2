@@ -1150,21 +1150,10 @@ where
             let port_color = if close_enough {
                 Color32::WHITE
             } else {
-                // For output ports, brighten based on signal level
+                // For output ports, let the app customize the color (e.g., for signal-based brightness)
                 if let AnyParameterId::Output(output_id) = param_id {
                     if let Some(output_index) = graph.get_output_index(output_id) {
-                        if let Some(signal_level) = user_state.get_output_signal_level(node_id, output_index) {
-                            // Lerp from base color towards white based on signal level
-                            let brightness = signal_level.abs().clamp(0.0, 1.0);
-                            let lit_color = Color32::from_rgb(
-                                (base_color.r() as f32 + (255.0 - base_color.r() as f32) * brightness) as u8,
-                                (base_color.g() as f32 + (255.0 - base_color.g() as f32) * brightness) as u8,
-                                (base_color.b() as f32 + (255.0 - base_color.b() as f32) * brightness) as u8,
-                            );
-                            lit_color
-                        } else {
-                            base_color
-                        }
+                        user_state.output_port_color(node_id, output_index, base_color)
                     } else {
                         base_color
                     }
