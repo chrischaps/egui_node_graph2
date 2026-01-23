@@ -878,6 +878,15 @@ where
         child_ui.vertical(|ui| {
             let title_rect_before = ui.min_rect();
             ui.horizontal(|ui| {
+                // Draw top_bar_ui first (icon) before the label
+                responses.extend(self.graph[self.node_id].user_data.top_bar_ui(
+                    ui,
+                    self.node_id,
+                    self.graph,
+                    user_state,
+                    pan_zoom.zoom,
+                ));
+
                 // Draw node label directly with painter to avoid intercepting mouse events
                 // This allows dragging the node by clicking on the title text
                 let label_text = &self.graph[self.node_id].label;
@@ -890,13 +899,6 @@ where
                 let label_rect = ui.allocate_space(galley.size()).1;
                 ui.painter().galley(label_rect.min, galley, text_color);
 
-                responses.extend(self.graph[self.node_id].user_data.top_bar_ui(
-                    ui,
-                    self.node_id,
-                    self.graph,
-                    user_state,
-                    pan_zoom.zoom,
-                ));
                 ui.add_space(8.0 * pan_zoom.zoom); // The size of the little cross icon
             });
             ui.add_space(margin.y);
