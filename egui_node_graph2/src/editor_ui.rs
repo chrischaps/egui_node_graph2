@@ -781,6 +781,7 @@ where
     ValueType:
         WidgetValueTrait<Response = UserResponse, UserState = UserState, NodeData = NodeData>,
     DataType: DataTypeTrait<UserState>,
+    UserState: ConnectionSignalTrait,
 {
     pub const MAX_NODE_SIZE: [f32; 2] = [200.0, 200.0];
 
@@ -1102,6 +1103,7 @@ where
             DataType: DataTypeTrait<UserState>,
             UserResponse: UserResponseTrait,
             NodeData: NodeDataTrait,
+            UserState: ConnectionSignalTrait,
         {
             let port_type = graph.any_param_type(param_id).unwrap();
 
@@ -1144,10 +1146,31 @@ where
                 false
             };
 
+            let base_color = port_type.data_type_color(user_state);
             let port_color = if close_enough {
                 Color32::WHITE
             } else {
-                port_type.data_type_color(user_state)
+                // For output ports, brighten based on signal level
+                if let AnyParameterId::Output(output_id) = param_id {
+                    if let Some(output_index) = graph.get_output_index(output_id) {
+                        if let Some(signal_level) = user_state.get_output_signal_level(node_id, output_index) {
+                            // Lerp from base color towards white based on signal level
+                            let brightness = signal_level.abs().clamp(0.0, 1.0);
+                            let lit_color = Color32::from_rgb(
+                                (base_color.r() as f32 + (255.0 - base_color.r() as f32) * brightness) as u8,
+                                (base_color.g() as f32 + (255.0 - base_color.g() as f32) * brightness) as u8,
+                                (base_color.b() as f32 + (255.0 - base_color.b() as f32) * brightness) as u8,
+                            );
+                            lit_color
+                        } else {
+                            base_color
+                        }
+                    } else {
+                        base_color
+                    }
+                } else {
+                    base_color
+                }
             };
 
             if wide_port {
