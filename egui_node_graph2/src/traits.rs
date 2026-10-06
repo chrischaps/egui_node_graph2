@@ -311,6 +311,29 @@ pub trait ConnectionSignalTrait {
         None
     }
 
+    /// How many channels (polyphonic voices) an output port carries.
+    ///
+    /// A cable from an output with more than one channel is drawn as a
+    /// bundle of strands, one per channel. Default implementation returns 1,
+    /// so every cable is drawn as a single mono strand.
+    fn output_channel_count(&self, _node_id: NodeId, _output_index: usize) -> usize {
+        1
+    }
+
+    /// Get the signal level of one channel (counting from 0) of an output
+    /// port, used to animate that channel's strand of a polyphonic cable.
+    ///
+    /// Default implementation returns the level of the whole output for
+    /// every channel.
+    fn get_output_channel_signal_level(
+        &self,
+        node_id: NodeId,
+        output_index: usize,
+        _channel: usize,
+    ) -> Option<f32> {
+        self.get_output_signal_level(node_id, output_index)
+    }
+
     /// Get the color for an output port, allowing signal-based visual feedback.
     ///
     /// This method is called when rendering output ports and allows the application

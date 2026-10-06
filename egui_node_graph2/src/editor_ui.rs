@@ -5,7 +5,7 @@ use crate::color_hex_utils::*;
 use crate::utils::ColorUtils;
 
 use super::*;
-use egui::epaint::{CubicBezierShape, RectShape};
+use egui::epaint::{CubicBezierShape, PathShape, RectShape};
 use egui::*;
 
 /// Mapping from parameter id to positions of hooks it contains.
@@ -381,6 +381,19 @@ where
                     start_pos,
                 ),
             };
+            // A cable dragged out of a polyphonic output already shows its strands
+            let channels = match *locator {
+                AnyParameterId::Output(output) => self
+                    .graph
+                    .get_output_index(output)
+                    .map(|idx| {
+                        user_state.output_channel_count(self.graph.get_output(output).node, idx)
+                    })
+                    .unwrap_or(1),
+                AnyParameterId::Input(_) => 1,
+            };
+            let strands = [None; poly_cable::MAX_STRANDS];
+
             draw_connection(
                 &self.pan_zoom,
                 ui.painter(),
@@ -389,6 +402,7 @@ where
                 connection_color,
                 0.0, // No animation for in-progress connections
                 None, // No signal level for in-progress connections
+                &strands[..channels.clamp(1, poly_cable::MAX_STRANDS)],
             );
         }
 
@@ -416,6 +430,24 @@ where
                     user_state.get_output_signal_level(output_param.node, idx)
                 });
 
+                // One strand per channel, each animated by its own level
+                let channels = output_index
+                    .map(|idx| user_state.output_channel_count(output_param.node, idx))
+                    .unwrap_or(1)
+                    .clamp(1, poly_cable::MAX_STRANDS);
+                let mut strands = [None; poly_cable::MAX_STRANDS];
+                if channels > 1 {
+                    if let Some(idx) = output_index {
+                        for (channel, level) in strands[..channels].iter_mut().enumerate() {
+                            *level = user_state.get_output_channel_signal_level(
+                                output_param.node,
+                                idx,
+                                channel,
+                            );
+                        }
+                    }
+                }
+
                 draw_connection(
                     &self.pan_zoom,
                     ui.painter(),
@@ -424,6 +456,7 @@ where
                     connection_color,
                     anim_time,
                     signal_level,
+                    &strands[..channels],
                 );
             }
         }
@@ -616,6 +649,44 @@ mod cable_anim {
     pub const MIN_GLOW_ALPHA: u8 = 20;
 }
 
+/// Polyphonic cable look: one strand per channel, bundled side by side in a
+/// dark sheath that pinches in where it plugs into a jack
+mod poly_cable {
+    /// Most strands drawn for one cable; channels past this aren't shown
+    pub const MAX_STRANDS: usize = 16;
+    /// How much each doubling of the channel count widens the bundle, as a
+    /// fraction of a mono cable's width
+    pub const WIDTH_PER_DOUBLING: f32 = 0.55;
+    /// Fraction of the space between strand centers each strand fills; the
+    /// rest shows the sheath, which is what separates the strands
+    pub const STRAND_FILL: f32 = 0.72;
+    /// Narrowest a strand gets on screen, so zoomed-out bundles keep their texture
+    pub const MIN_STRAND_PX: f32 = 0.6;
+    /// How far the sheath reaches past the outermost strands
+    pub const SHEATH_PAD: f32 = 0.8;
+    /// Sheath brightness relative to the cable color
+    pub const SHEATH_SHADE: f32 = 0.32;
+    /// Brightness of every other strand relative to the cable color
+    pub const ALT_STRAND_SHADE: f32 = 0.8;
+    /// Bundle width where it meets a jack (a jack is 10 across)
+    pub const PLUG_WIDTH: f32 = 7.0;
+    /// Length over which the bundle flares from the jack to its full width
+    pub const FLARE_LENGTH: f32 = 28.0;
+    /// Length of the straight segments each strand is drawn with
+    pub const SEGMENT_LENGTH: f32 = 6.0;
+    pub const MIN_SEGMENTS: usize = 12;
+    pub const MAX_SEGMENTS: usize = 96;
+    /// Flowing dot size relative to the strand width
+    pub const DOT_SIZE_RATIO: f32 = 1.3;
+
+    /// Bundle width of a cable carrying `channels` channels: it grows with
+    /// each doubling rather than with every channel, so an 8-voice cable
+    /// reads as heavy without swamping the patch
+    pub fn bundle_width(mono_width: f32, channels: usize) -> f32 {
+        mono_width * (1.0 + WIDTH_PER_DOUBLING * (channels as f32).log2())
+    }
+}
+
 /// Evaluate a cubic bezier curve at parameter t (0.0 to 1.0)
 fn cubic_bezier_point(p0: Pos2, p1: Pos2, p2: Pos2, p3: Pos2, t: f32) -> Pos2 {
     let t2 = t * t;
@@ -643,6 +714,34 @@ fn approx_bezier_length(p0: Pos2, p1: Pos2, p2: Pos2, p3: Pos2, samples: usize) 
     length
 }
 
+/// Direction of travel along a cubic bezier curve at parameter t (0.0 to 1.0),
+/// as a unit vector, or zero where the curve has none
+fn cubic_bezier_direction(p0: Pos2, p1: Pos2, p2: Pos2, p3: Pos2, t: f32) -> Vec2 {
+    let mt = 1.0 - t;
+    let derivative = 3.0 * mt * mt * (p1 - p0) + 6.0 * mt * t * (p2 - p1) + 3.0 * t * t * (p3 - p2);
+    derivative.normalized()
+}
+
+/// Smooth 0-to-1 ramp of `x` across `0..edge`
+fn smoothstep(edge: f32, x: f32) -> f32 {
+    let x = (x / edge).clamp(0.0, 1.0);
+    x * x * (3.0 - 2.0 * x)
+}
+
+/// Scale a color's brightness, keeping its alpha
+fn shade(color: Color32, factor: f32) -> Color32 {
+    let scale = |c: u8| (c as f32 * factor).round().clamp(0.0, 255.0) as u8;
+    Color32::from_rgba_unmultiplied(scale(color.r()), scale(color.g()), scale(color.b()), color.a())
+}
+
+/// Draw a cable from an output to an input.
+///
+/// `strands` holds one signal level per channel the cable carries. A mono
+/// cable (one strand) is a single bezier; a polyphonic one is a bundle of
+/// strands, each with dots that flow at its own channel's level, so the
+/// voices of a chord can be seen coming and going. The glow behind the cable
+/// follows `signal_level`, the level of the whole cable.
+#[allow(clippy::too_many_arguments)]
 fn draw_connection(
     pan_zoom: &PanZoom,
     painter: &Painter,
@@ -651,16 +750,21 @@ fn draw_connection(
     color: Color32,
     anim_time: f64,
     signal_level: Option<f32>,
+    strands: &[Option<f32>],
 ) {
-    let cable_width = 5.0 * pan_zoom.zoom;
-    let connection_stroke = egui::Stroke {
-        width: cable_width,
-        color,
+    let zoom = pan_zoom.zoom;
+    let cable_width = 5.0 * zoom;
+    let channels = strands.len().max(1);
+    let bundle_width = if channels > 1 {
+        poly_cable::bundle_width(cable_width, channels)
+    } else {
+        cable_width
     };
 
-    let control_scale = ((dst_pos.x - src_pos.x) * pan_zoom.zoom / 2.0).max(30.0 * pan_zoom.zoom);
+    let control_scale = ((dst_pos.x - src_pos.x) * zoom / 2.0).max(30.0 * zoom);
     let src_control = src_pos + Vec2::X * control_scale;
     let dst_control = dst_pos - Vec2::X * control_scale;
+    let curve = [src_pos, src_control, dst_control, dst_pos];
 
     // Draw glow effect (behind the cable) based on signal level
     if let Some(signal) = signal_level {
@@ -671,7 +775,8 @@ fn draw_connection(
             let alpha_range = cable_anim::MAX_GLOW_ALPHA - cable_anim::MIN_GLOW_ALPHA;
             let glow_alpha = cable_anim::MIN_GLOW_ALPHA + (alpha_range as f32 * intensity) as u8;
 
-            let glow_width = cable_width * cable_anim::GLOW_WIDTH_MULTIPLIER;
+            // Reaches as far past a bundle as past a mono cable
+            let glow_width = bundle_width + cable_width * (cable_anim::GLOW_WIDTH_MULTIPLIER - 1.0);
             let glow_color = Color32::from_rgba_unmultiplied(
                 color.r(),
                 color.g(),
@@ -684,7 +789,7 @@ fn draw_connection(
             };
 
             let glow_bezier = CubicBezierShape::from_points_stroke(
-                [src_pos, src_control, dst_control, dst_pos],
+                curve,
                 false,
                 Color32::TRANSPARENT,
                 glow_stroke,
@@ -693,75 +798,169 @@ fn draw_connection(
         }
     }
 
-    // Draw the base cable
-    let bezier = CubicBezierShape::from_points_stroke(
-        [src_pos, src_control, dst_control, dst_pos],
-        false,
-        Color32::TRANSPARENT,
-        connection_stroke,
-    );
-    painter.add(bezier);
-
     // Calculate actual bezier arc length for consistent dot density
     let arc_length = approx_bezier_length(src_pos, src_control, dst_control, dst_pos, 16);
+    let animate = arc_length > cable_anim::MIN_LENGTH_FOR_ANIM * zoom;
 
-    // Draw flowing animation dots based on signal level
-    if arc_length > cable_anim::MIN_LENGTH_FOR_ANIM * pan_zoom.zoom {
-        // Get signal value - keep sign for direction, use abs for intensity
-        let signal = signal_level.unwrap_or(0.0);
-        let abs_signal = signal.abs();
+    if channels == 1 {
+        // Draw the base cable
+        let connection_stroke = egui::Stroke {
+            width: cable_width,
+            color,
+        };
+        let bezier = CubicBezierShape::from_points_stroke(
+            curve,
+            false,
+            Color32::TRANSPARENT,
+            connection_stroke,
+        );
+        painter.add(bezier);
 
-        // Only animate if signal is above threshold (or if no signal data available for fallback)
-        let should_animate = signal_level.is_none() || abs_signal > cable_anim::SIGNAL_THRESHOLD;
-
-        if should_animate {
-            // Calculate animation intensity based on signal level
-            // If no signal data, use a default medium intensity
-            let intensity = if signal_level.is_some() {
-                // Clamp signal to 0-1 range for intensity calculation
-                abs_signal.clamp(0.0, 1.0)
-            } else {
-                0.5 // Default intensity when no signal feedback available
-            };
-
-            // Determine flow direction: positive = forward (src->dst), negative = reverse (dst->src)
-            let flow_direction = if signal_level.is_some() && signal < 0.0 { -1.0 } else { 1.0 };
-
-            // Speed scales with signal level
-            let speed_multiplier = 1.0 + (cable_anim::MAX_SPEED_MULTIPLIER - 1.0) * intensity as f64;
-            let flow_speed = cable_anim::BASE_FLOW_SPEED * speed_multiplier * flow_direction;
-
-            // Calculate phase based on time (0.0 to 1.0, looping)
-            // Use modulo to handle negative phase from reverse flow
-            let phase = (anim_time * flow_speed).rem_euclid(1.0);
-
-            // Alpha scales with signal level
-            let alpha_range = cable_anim::MAX_DOT_ALPHA - cable_anim::MIN_DOT_ALPHA;
-            let dot_alpha = cable_anim::MIN_DOT_ALPHA + (alpha_range as f32 * intensity) as u8;
-
-            // Calculate dot count based on cable length for consistent density
-            let dot_count = ((arc_length / (cable_anim::DOT_SPACING * pan_zoom.zoom)) as usize)
-                .clamp(cable_anim::MIN_DOT_COUNT, cable_anim::MAX_DOT_COUNT);
-
-            // Draw dots flowing along the cable
+        if animate {
             let dot_radius = cable_width * cable_anim::DOT_SIZE_RATIO * 0.5;
-            let dot_color = Color32::from_rgba_unmultiplied(
-                color.r().saturating_add(cable_anim::COLOR_BOOST),
-                color.g().saturating_add(cable_anim::COLOR_BOOST),
-                color.b().saturating_add(cable_anim::COLOR_BOOST),
-                dot_alpha,
+            draw_flow_dots(
+                painter,
+                |t| cubic_bezier_point(src_pos, src_control, dst_control, dst_pos, t),
+                arc_length,
+                zoom,
+                dot_radius,
+                color,
+                anim_time,
+                signal_level,
+                0.0,
             );
-
-            for i in 0..dot_count {
-                // Spread dots evenly along the cable, offset by phase
-                let t = ((i as f64 / dot_count as f64) + phase).rem_euclid(1.0) as f32;
-
-                // Sample point on the bezier curve
-                let point = cubic_bezier_point(src_pos, src_control, dst_control, dst_pos, t);
-
-                painter.circle_filled(point, dot_radius, dot_color);
-            }
         }
+        return;
+    }
+
+    // Polyphonic bundle. Each strand runs at a fixed offset from the curve,
+    // squeezed together near the ends so the bundle fits into the jacks
+    let spacing = bundle_width / channels as f32;
+    let strand_width = (spacing * poly_cable::STRAND_FILL).max(poly_cable::MIN_STRAND_PX);
+    let pinch = (poly_cable::PLUG_WIDTH * zoom / bundle_width).min(1.0);
+    let flare = (poly_cable::FLARE_LENGTH * zoom / arc_length.max(1.0)).min(0.4);
+    let spread = |t: f32| pinch + (1.0 - pinch) * smoothstep(flare, t) * smoothstep(flare, 1.0 - t);
+    let offset = |channel: usize| (channel as f32 - (channels - 1) as f32 / 2.0) * spacing;
+    let strand_point = |channel: usize, t: f32| {
+        let normal = cubic_bezier_direction(src_pos, src_control, dst_control, dst_pos, t).rot90();
+        cubic_bezier_point(src_pos, src_control, dst_control, dst_pos, t)
+            + normal * offset(channel) * spread(t)
+    };
+
+    let segments = ((arc_length / (poly_cable::SEGMENT_LENGTH * zoom)) as usize)
+        .clamp(poly_cable::MIN_SEGMENTS, poly_cable::MAX_SEGMENTS);
+    let paths: Vec<Vec<Pos2>> = (0..channels)
+        .map(|channel| {
+            (0..=segments)
+                .map(|i| strand_point(channel, i as f32 / segments as f32))
+                .collect()
+        })
+        .collect();
+
+    // The sheath: each strand's path drawn wide enough to meet its
+    // neighbours, so together they make one dark ribbon
+    let sheath_width = spacing.max(strand_width) + 2.0 * poly_cable::SHEATH_PAD * zoom;
+    let sheath_color = shade(color, poly_cable::SHEATH_SHADE);
+    for path in &paths {
+        painter.add(PathShape::line(path.clone(), Stroke::new(sheath_width, sheath_color)));
+    }
+
+    // The strands, alternating in tone like the cores of a ribbon cable
+    for (channel, path) in paths.into_iter().enumerate() {
+        let strand_color = if channel % 2 == 0 {
+            color
+        } else {
+            shade(color, poly_cable::ALT_STRAND_SHADE)
+        };
+        painter.add(PathShape::line(path, Stroke::new(strand_width, strand_color)));
+    }
+
+    if animate {
+        let dot_radius = strand_width * poly_cable::DOT_SIZE_RATIO * 0.5;
+        for (channel, &level) in strands.iter().enumerate() {
+            // Stagger by the golden ratio so the strands' dots never line up
+            let stagger = (channel as f64 * 0.618_034).fract();
+            draw_flow_dots(
+                painter,
+                |t| strand_point(channel, t),
+                arc_length,
+                zoom,
+                dot_radius,
+                color,
+                anim_time,
+                level,
+                stagger,
+            );
+        }
+    }
+}
+
+/// Draw dots flowing along one strand of a cable, at a speed and brightness
+/// set by its signal level, backwards for a negative one. `point_at` maps a
+/// position along the cable (0.0 at the output, 1.0 at the input) to the
+/// screen, and `stagger` shifts the dots by a fraction of their spacing.
+#[allow(clippy::too_many_arguments)]
+fn draw_flow_dots(
+    painter: &Painter,
+    point_at: impl Fn(f32) -> Pos2,
+    arc_length: f32,
+    zoom: f32,
+    dot_radius: f32,
+    color: Color32,
+    anim_time: f64,
+    signal_level: Option<f32>,
+    stagger: f64,
+) {
+    // Get signal value - keep sign for direction, use abs for intensity
+    let signal = signal_level.unwrap_or(0.0);
+    let abs_signal = signal.abs();
+
+    // Only animate if signal is above threshold (or if no signal data available for fallback)
+    let should_animate = signal_level.is_none() || abs_signal > cable_anim::SIGNAL_THRESHOLD;
+    if !should_animate {
+        return;
+    }
+
+    // Calculate animation intensity based on signal level
+    // If no signal data, use a default medium intensity
+    let intensity = if signal_level.is_some() {
+        // Clamp signal to 0-1 range for intensity calculation
+        abs_signal.clamp(0.0, 1.0)
+    } else {
+        0.5 // Default intensity when no signal feedback available
+    };
+
+    // Determine flow direction: positive = forward (src->dst), negative = reverse (dst->src)
+    let flow_direction = if signal_level.is_some() && signal < 0.0 { -1.0 } else { 1.0 };
+
+    // Speed scales with signal level
+    let speed_multiplier = 1.0 + (cable_anim::MAX_SPEED_MULTIPLIER - 1.0) * intensity as f64;
+    let flow_speed = cable_anim::BASE_FLOW_SPEED * speed_multiplier * flow_direction;
+
+    // Calculate phase based on time (0.0 to 1.0, looping)
+    // Use modulo to handle negative phase from reverse flow
+    let phase = (anim_time * flow_speed).rem_euclid(1.0);
+
+    // Alpha scales with signal level
+    let alpha_range = cable_anim::MAX_DOT_ALPHA - cable_anim::MIN_DOT_ALPHA;
+    let dot_alpha = cable_anim::MIN_DOT_ALPHA + (alpha_range as f32 * intensity) as u8;
+
+    // Calculate dot count based on cable length for consistent density
+    let dot_count = ((arc_length / (cable_anim::DOT_SPACING * zoom)) as usize)
+        .clamp(cable_anim::MIN_DOT_COUNT, cable_anim::MAX_DOT_COUNT);
+
+    let dot_color = Color32::from_rgba_unmultiplied(
+        color.r().saturating_add(cable_anim::COLOR_BOOST),
+        color.g().saturating_add(cable_anim::COLOR_BOOST),
+        color.b().saturating_add(cable_anim::COLOR_BOOST),
+        dot_alpha,
+    );
+
+    // Draw dots flowing along the cable
+    for i in 0..dot_count {
+        // Spread dots evenly along the cable, offset by phase
+        let t = ((i as f64 + stagger) / dot_count as f64 + phase).rem_euclid(1.0) as f32;
+        painter.circle_filled(point_at(t), dot_radius, dot_color);
     }
 }
 
