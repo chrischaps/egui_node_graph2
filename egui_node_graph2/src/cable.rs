@@ -596,8 +596,8 @@ fn draw_bundle(painter: &Painter, zoom: f32, color: Color32, path: &CablePath, m
         painter.add(PathShape::line(strand.clone(), Stroke::new(strand_width, strand_color)));
     }
 
-    // Each strand's light, and a glow around the bundle as bright as its
-    // brightest voice
+    // Each strand's light, and a glow around the bundle that grows with how
+    // much of it is lit, so a chord glows brighter than a single note
     let intensity: Vec<Vec<f32>> = flow
         .strands
         .iter()
@@ -606,10 +606,10 @@ fn draw_bundle(painter: &Painter, zoom: f32, color: Color32, path: &CablePath, m
             None => vec![0.0; path.dist.len()],
         })
         .collect();
-    let loudest: Vec<f32> = (0..path.dist.len())
-        .map(|i| intensity.iter().map(|strand| strand[i]).fold(0.0, f32::max))
+    let fullness: Vec<f32> = (0..path.dist.len())
+        .map(|i| bundle_fullness(intensity.iter().map(|strand| strand[i])))
         .collect();
-    if loudest.iter().all(|&i| i <= 0.0) {
+    if fullness.iter().all(|&i| i <= 0.0) {
         return;
     }
     let mut mesh = Mesh::default();
@@ -620,7 +620,7 @@ fn draw_bundle(painter: &Painter, zoom: f32, color: Color32, path: &CablePath, m
         &path.points,
         &normals,
         &[(-reach, 0.0), (-half, 0.4), (half, 0.4), (reach, 0.0)],
-        |i| light(color, loudest[i] * look::GLOW_GAIN),
+        |i| light(color, fullness[i] * look::GLOW_GAIN),
     );
     let core_color = lift(color, look::CORE_LIFT);
     let core = strand_width * 0.5;
@@ -651,6 +651,14 @@ fn draw_bundle(painter: &Painter, zoom: f32, color: Color32, path: &CablePath, m
             draw_glyph(painter, flow.glyph, pos, dir, size, glyph_color, alpha);
         }
     }
+}
+
+/// How lit a bundle is, 0 to 1, from its strands' brightness: the square
+/// root of their mean, so one voice of eight glows about a third as bright
+/// as all eight, and each added voice still shows
+fn bundle_fullness(levels: impl ExactSizeIterator<Item = f32>) -> f32 {
+    let count = levels.len().max(1) as f32;
+    (levels.sum::<f32>() / count).max(0.0).sqrt()
 }
 
 #[cfg(test)]
@@ -693,6 +701,16 @@ mod tests {
         assert_eq!(trace.at(0.0), Some(1.0));
         assert_eq!(trace.at(0.05), Some(1.0));
         assert!((trace.at(0.1).unwrap() - 0.5).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_chord_fills_the_bundle_more_than_a_note() {
+        let one = bundle_fullness([1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0].into_iter());
+        let four = bundle_fullness([1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0].into_iter());
+        let all = bundle_fullness([1.0; 8].into_iter());
+        assert!((one - 0.354).abs() < 0.01);
+        assert!(one < four && four < all);
+        assert!((all - 1.0).abs() < 1e-6);
     }
 
     #[test]
