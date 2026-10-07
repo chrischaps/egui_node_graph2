@@ -294,8 +294,9 @@ pub trait UserResponseTrait: Clone + std::fmt::Debug {}
 /// Implement this trait on your UserState to enable signal-driven cable animations
 /// where the animation intensity reflects the actual signal level on each connection.
 ///
-/// If not implemented (using the default implementation), cables will animate
-/// continuously without signal feedback.
+/// Cables draw the signal flowing through them from
+/// [`output_trace`](Self::output_trace); with only the default implementations,
+/// cables are drawn without any signal.
 pub trait ConnectionSignalTrait {
     /// Get the signal level for an output port, used for cable animation.
     ///
@@ -332,6 +333,28 @@ pub trait ConnectionSignalTrait {
         _channel: usize,
     ) -> Option<f32> {
         self.get_output_signal_level(node_id, output_index)
+    }
+
+    /// The recent past of one channel (counting from 0) of an output port,
+    /// which a cable from it draws as its signal flowing from output to
+    /// input: the point a distance `s` along the cable shows the signal as
+    /// it was `s / FLOW_SPEED` seconds ago.
+    ///
+    /// Default implementation fills the cable with the channel's current
+    /// level from [`Self::get_output_channel_signal_level`].
+    fn output_trace(
+        &self,
+        node_id: NodeId,
+        output_index: usize,
+        channel: usize,
+    ) -> Option<SignalTrace<'_>> {
+        self.get_output_channel_signal_level(node_id, output_index, channel)
+            .map(SignalTrace::steady)
+    }
+
+    /// The mark that rides the flow along every cable. Default is chevrons.
+    fn flow_glyph(&self) -> FlowGlyph {
+        FlowGlyph::default()
     }
 
     /// Get the color for an output port, allowing signal-based visual feedback.

@@ -33,6 +33,9 @@ pub mod node_finder;
 pub use node_finder::*;
 
 /// The inner details of the egui implementation. Most egui code lives here.
+pub mod cable;
+pub use cable::{FlowGlyph, SignalTrace, FLOW_SPEED};
+
 pub mod editor_ui;
 pub use editor_ui::*;
 
