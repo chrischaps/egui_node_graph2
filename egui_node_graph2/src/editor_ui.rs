@@ -91,6 +91,21 @@ impl<UserResponse: UserResponseTrait, NodeData: NodeDataTrait> Default
         }
     }
 }
+/// The parts of the editor the backdrop may read and change. See
+/// [`ConnectionSignalTrait::backdrop_ui`].
+pub struct Backdrop<'a> {
+    /// Where node position (0, 0) is on screen: a node at `p` has its
+    /// top-left corner at `origin + p`.
+    pub origin: Pos2,
+    /// The editor's zoom. Node positions are in zoomed points.
+    pub zoom: f32,
+    pub node_positions: &'a mut SecondaryMap<NodeId, Pos2>,
+    pub selected_nodes: &'a mut Vec<NodeId>,
+    /// The view's pan, for backdrop widgets that pan the view when dragged
+    /// with the middle button, as the background does.
+    pub pan: &'a mut Vec2,
+}
+
 pub struct GraphNodeWidget<'a, NodeData, DataType, ValueType> {
     pub position: &'a mut Pos2,
     pub graph: &'a mut Graph<NodeData, DataType, ValueType>,
@@ -246,6 +261,18 @@ where
         } else if r.drag_stopped() {
             drag_released_on_background = true;
         }
+
+        /* Draw the backdrop: under the nodes, over the background */
+        user_state.backdrop_ui(
+            ui,
+            Backdrop {
+                origin: editor_rect.min + self.pan_zoom.pan,
+                zoom: self.pan_zoom.zoom,
+                node_positions: &mut self.node_positions,
+                selected_nodes: &mut self.selected_nodes,
+                pan: &mut self.pan_zoom.pan,
+            },
+        );
 
         /* Draw nodes */
         for node_id in self.node_order.iter().copied() {

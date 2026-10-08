@@ -397,4 +397,15 @@ pub trait ConnectionSignalTrait {
     ) -> egui::Color32 {
         base_color
     }
+
+    /// Draws whatever lies on the canvas beneath the nodes, such as frames
+    /// and notes, and handles its interaction.
+    ///
+    /// Called once a frame, after the editor's background has taken its
+    /// clicks and before any node is drawn. Shapes painted here sit under the
+    /// nodes and cables; widgets here win clicks and drags over the empty
+    /// background, and nodes still win them over these widgets. Nodes moved
+    /// through [`Backdrop::node_positions`] are drawn in their new place in
+    /// the same frame. Default implementation draws nothing.
+    fn backdrop_ui(&mut self, _ui: &mut egui::Ui, _backdrop: Backdrop<'_>) {}
 }
