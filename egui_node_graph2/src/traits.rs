@@ -164,6 +164,25 @@ where
         None
     }
 
+    /// Colour of the titlebar's text, which the close button also takes, so
+    /// both can be kept legible against [`Self::titlebar_color`].
+    /// If the return value is None, the default colours are used.
+    fn titlebar_text_color(
+        &self,
+        _ui: &egui::Ui,
+        _node_id: NodeId,
+        _graph: &Graph<Self, Self::DataType, Self::ValueType>,
+        _user_state: &mut Self::UserState,
+    ) -> Option<egui::Color32> {
+        None
+    }
+
+    /// Text style the node's title is set in. It's resolved against the
+    /// zoomed style, so a named style scales with the graph like the rest.
+    fn titlebar_text_style(&self) -> egui::TextStyle {
+        egui::TextStyle::Button
+    }
+
     /// Separator to put between elements in the node.
     ///
     /// Invoked between inputs, outputs and bottom UI. Useful for

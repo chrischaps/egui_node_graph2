@@ -673,6 +673,14 @@ where
         ui.visuals_mut().widgets.noninteractive.fg_stroke =
             Stroke::new(2.0 * pan_zoom.zoom, text_color);
 
+        // The app's choice of ink for the title and close button, if any
+        let title_ink = self.graph[self.node_id].user_data.titlebar_text_color(
+            ui,
+            self.node_id,
+            self.graph,
+            user_state,
+        );
+
         // Preallocate shapes to paint below contents
         let outline_shape = ui.painter().add(Shape::Noop);
         let background_shape = ui.painter().add(Shape::Noop);
@@ -739,14 +747,16 @@ where
                 // Draw node label directly with painter to avoid intercepting mouse events
                 // This allows dragging the node by clicking on the title text
                 let label_text = &self.graph[self.node_id].label;
-                let font_id = TextStyle::Button.resolve(ui.style());
+                let text_style = self.graph[self.node_id].user_data.titlebar_text_style();
+                let font_id = text_style.resolve(ui.style());
+                let title_color = title_ink.unwrap_or(text_color);
                 let galley = ui.painter().layout_no_wrap(
                     label_text.to_string(),
                     font_id,
-                    text_color,
+                    title_color,
                 );
                 let label_rect = ui.allocate_space(galley.size()).1;
-                ui.painter().galley(label_rect.min, galley, text_color);
+                ui.painter().galley(label_rect.min, galley, title_color);
 
                 ui.add_space(8.0 * pan_zoom.zoom); // The size of the little cross icon
             });
@@ -1247,7 +1257,7 @@ where
             user_state,
         );
 
-        if can_delete && Self::close_button(pan_zoom, ui, outer_rect).clicked() {
+        if can_delete && Self::close_button(pan_zoom, ui, outer_rect, title_ink).clicked() {
             responses.push(NodeResponse::DeleteNodeUi(self.node_id));
         };
 
@@ -1273,7 +1283,7 @@ where
         responses
     }
 
-    fn close_button(pan_zoom: &PanZoom, ui: &mut Ui, node_rect: Rect) -> Response {
+    fn close_button(pan_zoom: &PanZoom, ui: &mut Ui, node_rect: Rect, ink: Option<Color32>) -> Response {
         // Measurements
         let margin = 8.0 * pan_zoom.zoom;
         let size = 10.0 * pan_zoom.zoom;
@@ -1282,6 +1292,29 @@ where
 
         let position = pos2(node_rect.right() - offs, node_rect.top() + offs);
         let rect = Rect::from_center_size(position, vec2(size, size));
+
+        if let Some(ink) = ink {
+            // A larger target than the cross itself, which sits in the title's
+            // ink: a little quieter than the text until it's pointed at
+            let resp = ui.allocate_rect(rect.expand(3.0 * pan_zoom.zoom), Sense::click());
+            let cross = rect.shrink(0.5 * pan_zoom.zoom);
+            let color = if resp.is_pointer_button_down_on() {
+                ink
+            } else if resp.hovered() {
+                ui.painter()
+                    .circle_filled(position, size * 0.95, ink.gamma_multiply(0.16));
+                ink
+            } else {
+                ink.gamma_multiply(0.8)
+            };
+            let stroke = Stroke::new((1.8 * pan_zoom.zoom).max(1.0), color);
+            ui.painter()
+                .line_segment([cross.left_top(), cross.right_bottom()], stroke);
+            ui.painter()
+                .line_segment([cross.right_top(), cross.left_bottom()], stroke);
+            return resp;
+        }
+
         let resp = ui.allocate_rect(rect, Sense::click());
 
         let dark_mode = ui.visuals().dark_mode;
