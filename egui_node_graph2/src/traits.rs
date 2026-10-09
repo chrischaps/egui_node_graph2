@@ -408,4 +408,12 @@ pub trait ConnectionSignalTrait {
     /// through [`Backdrop::node_positions`] are drawn in their new place in
     /// the same frame. Default implementation draws nothing.
     fn backdrop_ui(&mut self, _ui: &mut egui::Ui, _backdrop: Backdrop<'_>) {}
+
+    /// Whether a node is drawn this frame. A node that isn't shown is left
+    /// out entirely, with every cable to or from it, but keeps its place in
+    /// the graph, so an app can show one part of a graph at a time (the
+    /// inside of a group, say). Default implementation shows every node.
+    fn node_shown(&self, _node_id: NodeId) -> bool {
+        true
+    }
 }

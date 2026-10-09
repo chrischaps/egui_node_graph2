@@ -274,8 +274,14 @@ where
             },
         );
 
-        /* Draw nodes */
-        for node_id in self.node_order.iter().copied() {
+        /* Draw nodes, the ones the app shows */
+        let shown: Vec<NodeId> = self
+            .node_order
+            .iter()
+            .copied()
+            .filter(|&node_id| user_state.node_shown(node_id))
+            .collect();
+        for node_id in shown {
             let responses = GraphNodeWidget {
                 position: self.node_positions.get_mut(node_id).unwrap(),
                 graph: &mut self.graph,
@@ -332,6 +338,13 @@ where
         }
         if should_close_node_finder {
             self.node_finder = None;
+        }
+
+        // A cable can't be dragged from a port that's no longer shown
+        if let Some((_, locator)) = self.connection_in_progress {
+            if !port_locations.contains_key(&locator) {
+                self.connection_in_progress = None;
+            }
         }
 
         // draw in-progress connections
@@ -442,17 +455,25 @@ where
         ui.ctx().request_repaint();
         let glyph = user_state.flow_glyph();
 
-        // draw existing connections, each showing its signal's recent past
+        // draw existing connections, each showing its signal's recent past.
+        // A cable to or from a node that isn't shown isn't drawn either
         for (input, outputs) in self.graph.iter_connection_groups() {
             for (hook_n, &output) in outputs.iter().enumerate() {
+                // outputs can't be wide yet so this is fine.
+                let src_pos = port_locations
+                    .get(&AnyParameterId::Output(output))
+                    .and_then(|hooks| hooks.first().copied());
+                let dst_pos = conn_locations
+                    .get(&input)
+                    .and_then(|hooks| hooks.get(hook_n).copied());
+                let (Some(src_pos), Some(dst_pos)) = (src_pos, dst_pos) else {
+                    continue;
+                };
                 let port_type = self
                     .graph
                     .any_param_type(AnyParameterId::Output(output))
                     .unwrap();
                 let connection_color = port_type.data_type_color(user_state);
-                // outputs can't be wide yet so this is fine.
-                let src_pos = port_locations[&AnyParameterId::Output(output)][0];
-                let dst_pos = conn_locations[&input][hook_n];
 
                 // One strand per channel, each with its own voice's trace
                 let node = self.graph.get_output(output).node;
