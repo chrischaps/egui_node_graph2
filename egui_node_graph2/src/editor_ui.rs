@@ -27,6 +27,27 @@ pub type NodeRects = std::collections::HashMap<NodeId, Rect>;
 
 const DISTANCE_TO_CONNECT: f32 = 10.0;
 
+/// The heights of the ports a node lays out itself (see
+/// [`NodeDataTrait::places_port`]), as reported while it draws this frame.
+#[derive(Clone, Default)]
+struct PlacedPorts(Vec<(AnyParameterId, f32)>);
+
+fn placed_ports_id(node_id: NodeId) -> Id {
+    Id::new((node_id, "placed_ports"))
+}
+
+/// Reports where a port the node lays out itself goes: its jack is drawn on
+/// the node's edge at height `y` (screen space, like the `ui` it's drawn in).
+/// Call it every frame the node is drawn, even when its content is clipped,
+/// from any of the node's UI hooks.
+pub fn place_port(ui: &Ui, node_id: NodeId, param: AnyParameterId, y: f32) {
+    ui.ctx().data_mut(|data| {
+        data.get_temp_mut_or_default::<PlacedPorts>(placed_ports_id(node_id))
+            .0
+            .push((param, y))
+    });
+}
+
 /// Nodes communicate certain events to the parent graph when drawn. There is
 /// one special `User` variant which can be used by users as the return value
 /// when executing some custom actions in the UI of the node.
@@ -765,8 +786,15 @@ where
 
         let mut title_height = 0.0;
 
-        let mut input_port_heights = vec![];
-        let mut output_port_heights = vec![];
+        // Each row's port height, by port. Ports the node places itself get
+        // no row, and report their heights while the node draws
+        let mut input_port_heights: Vec<(InputId, f32)> = vec![];
+        let mut output_port_heights: Vec<(OutputId, f32)> = vec![];
+        ui.ctx()
+            .data_mut(|data| data.remove::<PlacedPorts>(placed_ports_id(self.node_id)));
+        let places = |graph: &Graph<NodeData, DataType, ValueType>, param: AnyParameterId| {
+            graph[self.node_id].user_data.places_port(self.node_id, graph, param)
+        };
 
         // Debug flag - set to true to visualize element bounds
         let debug_layout = false;
@@ -820,7 +848,9 @@ where
             // First pass: Draw the inner fields. Compute port heights
             let inputs = self.graph[self.node_id].inputs.clone();
             for (param_name, param_id) in inputs {
-                if self.graph[param_id].shown_inline {
+                if self.graph[param_id].shown_inline
+                    && !places(self.graph, AnyParameterId::Input(param_id))
+                {
                     let height_before = ui.min_rect().bottom();
 
                     if self.graph[param_id].max_connections == NonZeroU32::new(1) {
@@ -890,7 +920,7 @@ where
 
                     let height_after = ui.min_rect().bottom();
 
-                    input_port_heights.push((height_before + height_after) / 2.0);
+                    input_port_heights.push((param_id, (height_before + height_after) / 2.0));
                 }
             }
 
@@ -903,6 +933,9 @@ where
             let outputs = self.graph[self.node_id].outputs.clone();
             let outputs_start_rect = ui.min_rect();
             for (param_name, param_id) in outputs {
+                if places(self.graph, AnyParameterId::Output(param_id)) {
+                    continue;
+                }
                 let height_before = ui.min_rect().bottom();
                 let width_before = ui.min_rect().width();
                 responses.extend(
@@ -931,7 +964,7 @@ where
                 );
 
                 let height_after = ui.min_rect().bottom();
-                output_port_heights.push((height_before + height_after) / 2.0);
+                output_port_heights.push((param_id, (height_before + height_after) / 2.0));
             }
 
             // Debug: rect before bottom_ui
@@ -971,6 +1004,28 @@ where
         }
         let port_left = outer_rect.left();
         let port_right = outer_rect.right();
+
+        // A port's height: its row's, or where the node placed it. A placed
+        // port the node forgot to report sits at the foot, in plain sight
+        let placed = ui.ctx().data_mut(|data| {
+            data.remove_temp::<PlacedPorts>(placed_ports_id(self.node_id))
+                .unwrap_or_default()
+        });
+        let foot = outer_rect.bottom() - margin.y;
+        let port_y = |param: AnyParameterId, rows: &[(AnyParameterId, f32)]| {
+            rows.iter()
+                .chain(placed.0.iter())
+                .find(|(id, _)| *id == param)
+                .map_or(foot, |(_, y)| *y)
+        };
+        let input_rows: Vec<(AnyParameterId, f32)> = input_port_heights
+            .into_iter()
+            .map(|(id, y)| (AnyParameterId::Input(id), y))
+            .collect();
+        let output_rows: Vec<(AnyParameterId, f32)> = output_port_heights
+            .into_iter()
+            .map(|(id, y)| (AnyParameterId::Output(id), y))
+            .collect();
 
         // Save expanded rect to memory.
         ui.ctx().memory_mut(|mem| {
@@ -1159,11 +1214,8 @@ where
         }
 
         // Input ports
-        for ((_, param), port_height) in self.graph[self.node_id]
-            .inputs
-            .iter()
-            .zip(input_port_heights.into_iter())
-        {
+        for (_, param) in self.graph[self.node_id].inputs.iter() {
+            let port_height = port_y(AnyParameterId::Input(*param), &input_rows);
             let should_draw = match self.graph[*param].kind() {
                 InputParamKind::ConnectionOnly => true,
                 InputParamKind::ConstantOnly => false,
@@ -1196,11 +1248,8 @@ where
         }
 
         // Output ports
-        for ((_, param), port_height) in self.graph[self.node_id]
-            .outputs
-            .iter()
-            .zip(output_port_heights.into_iter())
-        {
+        for (_, param) in self.graph[self.node_id].outputs.iter() {
+            let port_height = port_y(AnyParameterId::Output(*param), &output_rows);
             let pos_right = pos2(port_right, port_height);
             draw_port(
                 pan_zoom,

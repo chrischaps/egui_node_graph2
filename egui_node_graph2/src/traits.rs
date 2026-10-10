@@ -209,6 +209,22 @@ where
     ) -> bool {
         true
     }
+
+    /// Whether the node lays this port out itself. A placed port gets no row
+    /// of its own (no value widget, no `output_ui`): its jack is drawn on the
+    /// node's left edge (an input) or right edge (an output), at the height
+    /// the node reports with [`crate::place_port`] while drawing its UI this
+    /// frame. A placed port that isn't reported sits at the node's foot.
+    ///
+    /// Default implementation places nothing.
+    fn places_port(
+        &self,
+        _node_id: NodeId,
+        _graph: &Graph<Self, Self::DataType, Self::ValueType>,
+        _param: AnyParameterId,
+    ) -> bool {
+        false
+    }
 }
 
 /// This trait can be implemented by any user type. The trait tells the library
