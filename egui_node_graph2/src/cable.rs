@@ -399,7 +399,7 @@ fn light(color: Color32, intensity: f32) -> Color32 {
 
 /// Draw one glyph at `pos`, pointing along `dir`. `size` is its length along
 /// the cable; `alpha` how visible it is.
-fn draw_glyph(painter: &Painter, glyph: FlowGlyph, pos: Pos2, dir: Vec2, size: f32, color: Color32, alpha: f32) {
+fn draw_glyph(out: &mut Vec<Shape>, glyph: FlowGlyph, pos: Pos2, dir: Vec2, size: f32, color: Color32, alpha: f32) {
     let normal = dir.rot90();
     let solid = color.gamma_multiply(alpha);
     match glyph {
@@ -408,13 +408,13 @@ fn draw_glyph(painter: &Painter, glyph: FlowGlyph, pos: Pos2, dir: Vec2, size: f
             let tip = pos + dir * half;
             let back = pos - dir * half;
             let wings = [back + normal * size * 0.62, tip, back - normal * size * 0.62];
-            painter.add(PathShape::line(
+            out.push(Shape::Path(PathShape::line(
                 wings.to_vec(),
                 Stroke::new((size * 0.24).max(1.0), solid),
-            ));
+            )));
         }
         FlowGlyph::Dot => {
-            painter.circle_filled(pos, size * 0.36, solid);
+            out.push(Shape::circle_filled(pos, size * 0.36, solid));
         }
         FlowGlyph::Comet => {
             // A bright head trailing a wedge of fading light
@@ -426,8 +426,8 @@ fn draw_glyph(painter: &Painter, glyph: FlowGlyph, pos: Pos2, dir: Vec2, size: f
             mesh.colored_vertex(head - normal * width, solid.gamma_multiply(0.85));
             mesh.colored_vertex(tail, Color32::TRANSPARENT);
             mesh.add_triangle(0, 1, 2);
-            painter.add(mesh);
-            painter.circle_filled(head, width, solid);
+            out.push(Shape::mesh(mesh));
+            out.push(Shape::circle_filled(head, width, solid));
         }
     }
 }
@@ -445,9 +445,10 @@ fn glyph_positions(time: f64, zoom: f32, length: f32, stagger: f32) -> impl Iter
         .take_while(move |&s| s < length)
 }
 
-/// Draw a cable from an output to an input, with its signal flowing through it
+/// Draw a cable from an output to an input, with its signal flowing through
+/// it, into `out`
 pub(crate) fn draw_connection(
-    painter: &Painter,
+    out: &mut Vec<Shape>,
     zoom: f32,
     src_pos: Pos2,
     dst_pos: Pos2,
@@ -468,23 +469,47 @@ pub(crate) fn draw_connection(
         length: path.length(),
     };
     if flow.strands.len() > 1 {
-        draw_bundle(painter, zoom, color, &path, &motion, flow);
+        draw_bundle(out, zoom, color, &path, &motion, flow);
     } else {
-        draw_mono(painter, zoom, color, &path, &motion, flow);
+        draw_mono(out, zoom, color, &path, &motion, flow);
     }
 }
 
-fn draw_mono(painter: &Painter, zoom: f32, color: Color32, path: &CablePath, motion: &Flow, flow: &CableFlow) {
+/// Scale every color a cable's shapes are painted in by `alpha`, as the eye
+/// sees it, so the cable shows at that much of its strength
+pub(crate) fn fade(shape: &mut Shape, alpha: f32) {
+    match shape {
+        Shape::Vec(shapes) => shapes.iter_mut().for_each(|shape| fade(shape, alpha)),
+        Shape::Path(path) => {
+            path.fill = path.fill.gamma_multiply(alpha);
+            if let epaint::ColorMode::Solid(color) = &mut path.stroke.color {
+                *color = color.gamma_multiply(alpha);
+            }
+        }
+        Shape::Circle(circle) => {
+            circle.fill = circle.fill.gamma_multiply(alpha);
+            circle.stroke.color = circle.stroke.color.gamma_multiply(alpha);
+        }
+        Shape::Mesh(mesh) => {
+            for vertex in &mut mesh.vertices {
+                vertex.color = vertex.color.gamma_multiply(alpha);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn draw_mono(out: &mut Vec<Shape>, zoom: f32, color: Color32, path: &CablePath, motion: &Flow, flow: &CableFlow) {
     let width = look::CABLE_WIDTH * zoom;
     let rim = Color32::from_black_alpha(look::OUTLINE_ALPHA);
-    painter.add(PathShape::line(
+    out.push(Shape::Path(PathShape::line(
         path.points.clone(),
         Stroke::new(width + 2.0 * look::OUTLINE * zoom, rim),
-    ));
-    painter.add(PathShape::line(
+    )));
+    out.push(Shape::Path(PathShape::line(
         path.points.clone(),
         Stroke::new(width, shade(color, look::BASE_SHADE)),
-    ));
+    )));
 
     let Some(trace) = flow.strands.first().copied().flatten() else {
         return;
@@ -522,7 +547,7 @@ fn draw_mono(painter: &Painter, zoom: f32, color: Color32, path: &CablePath, mot
         &[(-core, 0.0), (-core * 0.4, 1.0), (core * 0.4, 1.0), (core, 0.0)],
         |i| light(core_color, intensity[i] * look::CORE_GAIN),
     );
-    painter.add(mesh);
+    out.push(Shape::mesh(mesh));
 
     // Glyphs ride the light; on a waveform they follow its swing
     let glyph_color = lift(color, look::GLYPH_LIFT);
@@ -538,14 +563,14 @@ fn draw_mono(painter: &Painter, zoom: f32, color: Color32, path: &CablePath, mot
         }
         let nudge = 1.5 * zoom;
         let dir = (at(s + nudge) - at(s - nudge)).normalized();
-        draw_glyph(painter, flow.glyph, at(s), dir, size, glyph_color, alpha);
+        draw_glyph(out, flow.glyph, at(s), dir, size, glyph_color, alpha);
     }
 }
 
 /// A polyphonic cable: each strand runs at a fixed offset from the curve,
 /// squeezed together near the ends so the bundle fits into the jacks, and
 /// lights with its own voice
-fn draw_bundle(painter: &Painter, zoom: f32, color: Color32, path: &CablePath, motion: &Flow, flow: &CableFlow) {
+fn draw_bundle(out: &mut Vec<Shape>, zoom: f32, color: Color32, path: &CablePath, motion: &Flow, flow: &CableFlow) {
     let channels = flow.strands.len();
     let bundle_width = poly_cable::bundle_width(look::CABLE_WIDTH * zoom, channels);
     let spacing = bundle_width / channels as f32;
@@ -575,14 +600,14 @@ fn draw_bundle(painter: &Painter, zoom: f32, color: Color32, path: &CablePath, m
     let rim = Color32::from_black_alpha(look::OUTLINE_ALPHA);
     let sheath_width = spacing.max(strand_width) + 2.0 * poly_cable::SHEATH_PAD * zoom;
     for strand in [strand_paths.first(), strand_paths.last()].into_iter().flatten() {
-        painter.add(PathShape::line(
+        out.push(Shape::Path(PathShape::line(
             strand.clone(),
             Stroke::new(sheath_width + 2.0 * look::OUTLINE * zoom, rim),
-        ));
+        )));
     }
     let sheath_color = shade(color, poly_cable::SHEATH_SHADE);
     for strand in &strand_paths {
-        painter.add(PathShape::line(strand.clone(), Stroke::new(sheath_width, sheath_color)));
+        out.push(Shape::Path(PathShape::line(strand.clone(), Stroke::new(sheath_width, sheath_color))));
     }
 
     // The strands, alternating in tone like the cores of a ribbon cable
@@ -593,7 +618,7 @@ fn draw_bundle(painter: &Painter, zoom: f32, color: Color32, path: &CablePath, m
         } else {
             shade(base, poly_cable::ALT_STRAND_SHADE)
         };
-        painter.add(PathShape::line(strand.clone(), Stroke::new(strand_width, strand_color)));
+        out.push(Shape::Path(PathShape::line(strand.clone(), Stroke::new(strand_width, strand_color))));
     }
 
     // Each strand's light, and a glow around the bundle that grows with how
@@ -633,7 +658,7 @@ fn draw_bundle(painter: &Painter, zoom: f32, color: Color32, path: &CablePath, m
             |i| light(core_color, levels[i] * look::CORE_GAIN),
         );
     }
-    painter.add(mesh);
+    out.push(Shape::mesh(mesh));
 
     let glyph_color = lift(color, look::GLYPH_LIFT);
     let size = strand_width * poly_cable::GLYPH_SIZE * 2.0;
@@ -648,7 +673,7 @@ fn draw_bundle(painter: &Painter, zoom: f32, color: Color32, path: &CablePath, m
             }
             let (p, dir) = path.at(s);
             let pos = p + dir.rot90() * offset(channel) * spread(s);
-            draw_glyph(painter, flow.glyph, pos, dir, size, glyph_color, alpha);
+            draw_glyph(out, flow.glyph, pos, dir, size, glyph_color, alpha);
         }
     }
 }
@@ -729,5 +754,33 @@ mod tests {
         let (mid, dir) = path.at(50.0);
         assert!((mid.x - 50.0).abs() < 0.5);
         assert!((dir.x - 1.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_faded_cable_keeps_its_hue_at_a_fraction_of_its_strength() {
+        let mut shapes = Vec::new();
+        let flow = CableFlow { time: 0.0, glyph: FlowGlyph::Dot, strands: &[Some(SignalTrace::steady(1.0))] };
+        draw_connection(&mut shapes, 1.0, pos2(0.0, 0.0), pos2(200.0, 50.0), Color32::from_rgb(80, 160, 240), &flow);
+        let mut cable = Shape::Vec(shapes);
+        let before = cable.clone();
+        fade(&mut cable, 0.0);
+        let mut colors = Vec::new();
+        fn collect(shape: &Shape, colors: &mut Vec<Color32>) {
+            match shape {
+                Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, colors)),
+                Shape::Path(path) => {
+                    colors.push(path.fill);
+                    if let epaint::ColorMode::Solid(color) = path.stroke.color {
+                        colors.push(color);
+                    }
+                }
+                Shape::Circle(circle) => colors.push(circle.fill),
+                Shape::Mesh(mesh) => colors.extend(mesh.vertices.iter().map(|v| v.color)),
+                _ => {}
+            }
+        }
+        collect(&cable, &mut colors);
+        assert!(!colors.is_empty() && colors.iter().all(|&c| c == Color32::TRANSPARENT));
+        assert_ne!(before, cable);
     }
 }

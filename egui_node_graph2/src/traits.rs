@@ -392,6 +392,12 @@ pub trait ConnectionSignalTrait {
         FlowGlyph::default()
     }
 
+    /// How strongly a cable shows through a node it passes under, from 0
+    /// (not at all) to 1 (as strongly as over the canvas). Default is 0.15.
+    fn cable_through_node(&self) -> f32 {
+        0.15
+    }
+
     /// Get the color for an output port, allowing signal-based visual feedback.
     ///
     /// This method is called when rendering output ports and allows the application
@@ -419,7 +425,8 @@ pub trait ConnectionSignalTrait {
     ///
     /// Called once a frame, after the editor's background has taken its
     /// clicks and before any node is drawn. Shapes painted here sit under the
-    /// nodes and cables; widgets here win clicks and drags over the empty
+    /// nodes and cables, and shapes put in [`Backdrop::labels`] over the
+    /// cables but still under the nodes. Widgets here win clicks and drags over the empty
     /// background, and nodes still win them over these widgets. Nodes moved
     /// through [`Backdrop::node_positions`] are drawn in their new place in
     /// the same frame. Default implementation draws nothing.

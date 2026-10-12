@@ -5,7 +5,7 @@ use crate::color_hex_utils::*;
 use crate::utils::ColorUtils;
 
 use super::*;
-use crate::cable::{draw_connection, poly_cable, CableFlow};
+use crate::cable::{self, draw_connection, poly_cable, CableFlow};
 use egui::epaint::RectShape;
 use egui::*;
 
@@ -26,6 +26,7 @@ pub type ConnLocations = std::collections::HashMap<InputId, Vec<Pos2>>;
 pub type NodeRects = std::collections::HashMap<NodeId, Rect>;
 
 const DISTANCE_TO_CONNECT: f32 = 10.0;
+
 
 /// The heights of the ports a node lays out itself (see
 /// [`NodeDataTrait::places_port`]), as reported while it draws this frame.
@@ -125,6 +126,9 @@ pub struct Backdrop<'a> {
     /// The view's pan, for backdrop widgets that pan the view when dragged
     /// with the middle button, as the background does.
     pub pan: &'a mut Vec2,
+    /// Shapes painted over the cables but under the nodes: words on the
+    /// canvas, such as titles, that a cable passing by shouldn't cross out.
+    pub labels: &'a mut Vec<Shape>,
 }
 
 pub struct GraphNodeWidget<'a, NodeData, DataType, ValueType> {
@@ -284,6 +288,7 @@ where
         }
 
         /* Draw the backdrop: under the nodes, over the background */
+        let mut labels = Vec::new();
         user_state.backdrop_ui(
             ui,
             Backdrop {
@@ -292,8 +297,15 @@ where
                 node_positions: &mut self.node_positions,
                 selected_nodes: &mut self.selected_nodes,
                 pan: &mut self.pan_zoom.pan,
+                labels: &mut labels,
             },
         );
+
+        // Cables run under the nodes and the backdrop's labels. They're only
+        // known once the nodes have placed their ports, so their place in the
+        // paint order is kept for them
+        let cables_slot = ui.painter().add(Shape::Noop);
+        ui.painter().add(Shape::Vec(labels));
 
         /* Draw nodes, the ones the app shows */
         let shown: Vec<NodeId> = self
@@ -456,9 +468,11 @@ where
             };
             let strands = [None; poly_cable::MAX_STRANDS];
 
-            // Nothing flows through a cable until it's plugged in
+            // Nothing flows through a cable until it's plugged in. It's drawn
+            // over everything, where the hand is
+            let mut shapes = Vec::new();
             draw_connection(
-                ui.painter(),
+                &mut shapes,
                 self.pan_zoom.zoom,
                 src_pos,
                 dst_pos,
@@ -469,6 +483,7 @@ where
                     strands: &strands[..channels.clamp(1, poly_cable::MAX_STRANDS)],
                 },
             );
+            ui.painter().extend(shapes);
         }
 
         // The signal flows through the cables continuously
@@ -478,6 +493,7 @@ where
 
         // draw existing connections, each showing its signal's recent past.
         // A cable to or from a node that isn't shown isn't drawn either
+        let mut cables = Vec::new();
         for (input, outputs) in self.graph.iter_connection_groups() {
             for (hook_n, &output) in outputs.iter().enumerate() {
                 // outputs can't be wide yet so this is fine.
@@ -511,8 +527,9 @@ where
                     }
                 }
 
+                let mut shapes = Vec::new();
                 draw_connection(
-                    ui.painter(),
+                    &mut shapes,
                     self.pan_zoom.zoom,
                     src_pos,
                     dst_pos,
@@ -523,8 +540,25 @@ where
                         strands: &strands[..channels],
                     },
                 );
+                cables.push(Shape::Vec(shapes));
             }
         }
+
+        // Where a cable passes under a node it still shows faintly through
+        // the node's face, so the route can be followed without the cable
+        // covering the controls
+        let through = user_state.cable_through_node().clamp(0.0, 1.0);
+        for cable in cables.iter().filter(|_| through > 0.0) {
+            let bounds = cable.visual_bounding_rect();
+            for &node_rect in node_rects.values() {
+                if node_rect.intersects(bounds) {
+                    let mut ghost = cable.clone();
+                    cable::fade(&mut ghost, through);
+                    ui.painter().with_clip_rect(node_rect).add(ghost);
+                }
+            }
+        }
+        ui.painter().set(cables_slot, Shape::Vec(cables));
 
         /* Handle responses from drawing nodes */
 
