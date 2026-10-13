@@ -5,7 +5,7 @@ use crate::color_hex_utils::*;
 use crate::utils::ColorUtils;
 
 use super::*;
-use crate::cable::{self, draw_connection, poly_cable, CableFlow};
+use crate::cable::{draw_connection, poly_cable, CableFlow};
 use egui::epaint::RectShape;
 use egui::*;
 
@@ -494,6 +494,7 @@ where
         // draw existing connections, each showing its signal's recent past.
         // A cable to or from a node that isn't shown isn't drawn either
         let mut cables = Vec::new();
+        let mut lines = Vec::new();
         for (input, outputs) in self.graph.iter_connection_groups() {
             for (hook_n, &output) in outputs.iter().enumerate() {
                 // outputs can't be wide yet so this is fine.
@@ -528,7 +529,7 @@ where
                 }
 
                 let mut shapes = Vec::new();
-                draw_connection(
+                lines.push(draw_connection(
                     &mut shapes,
                     self.pan_zoom.zoom,
                     src_pos,
@@ -539,23 +540,22 @@ where
                         glyph,
                         strands: &strands[..channels],
                     },
-                );
+                ));
                 cables.push(Shape::Vec(shapes));
             }
         }
 
         // Where a cable passes under a node it still shows faintly through
         // the node's face, so the route can be followed without the cable
-        // covering the controls
+        // covering the controls. Each node's share is one mesh
         let through = user_state.cable_through_node().clamp(0.0, 1.0);
-        for cable in cables.iter().filter(|_| through > 0.0) {
-            let bounds = cable.visual_bounding_rect();
-            for &node_rect in node_rects.values() {
-                if node_rect.intersects(bounds) {
-                    let mut ghost = cable.clone();
-                    cable::fade(&mut ghost, through);
-                    ui.painter().with_clip_rect(node_rect).add(ghost);
-                }
+        for &node_rect in node_rects.values().filter(|_| through > 0.0) {
+            let mut ghosts = epaint::Mesh::default();
+            for line in &lines {
+                line.ghost(&mut ghosts, node_rect, through);
+            }
+            if !ghosts.is_empty() {
+                ui.painter().with_clip_rect(node_rect).add(ghosts);
             }
         }
         ui.painter().set(cables_slot, Shape::Vec(cables));

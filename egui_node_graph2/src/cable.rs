@@ -170,6 +170,8 @@ mod look {
     pub const SAMPLE_PX: f32 = 4.0;
     pub const MIN_SAMPLES: usize = 12;
     pub const MAX_SAMPLES: usize = 400;
+    /// Soft edge, in screen pixels, of a cable showing through a node
+    pub const GHOST_FEATHER: f32 = 1.0;
 }
 
 /// Polyphonic cable look: one strand per channel, bundled side by side in a
@@ -446,7 +448,7 @@ fn glyph_positions(time: f64, zoom: f32, length: f32, stagger: f32) -> impl Iter
 }
 
 /// Draw a cable from an output to an input, with its signal flowing through
-/// it, into `out`
+/// it, into `out`. Hands back its centerline, for the nodes it passes under
 pub(crate) fn draw_connection(
     out: &mut Vec<Shape>,
     zoom: f32,
@@ -454,7 +456,7 @@ pub(crate) fn draw_connection(
     dst_pos: Pos2,
     color: Color32,
     flow: &CableFlow,
-) {
+) -> CableLine {
     let control_scale = ((dst_pos.x - src_pos.x) * zoom / 2.0).max(30.0 * zoom);
     let curve = [
         src_pos,
@@ -468,38 +470,108 @@ pub(crate) fn draw_connection(
         zoom,
         length: path.length(),
     };
-    if flow.strands.len() > 1 {
-        draw_bundle(out, zoom, color, &path, &motion, flow);
+    let (width, light) = if flow.strands.len() > 1 {
+        let width = poly_cable::bundle_width(look::CABLE_WIDTH * zoom, flow.strands.len());
+        (width, draw_bundle(out, zoom, color, &path, &motion, flow))
     } else {
-        draw_mono(out, zoom, color, &path, &motion, flow);
+        (look::CABLE_WIDTH * zoom, draw_mono(out, zoom, color, &path, &motion, flow))
+    };
+    CableLine::new(path, width, color, light)
+}
+
+/// A cable as the nodes it passes under show it: a faint band of its color
+/// along just the stretch under each node, lit where its signal is, rather
+/// than the whole cable again. A cable crossing a busy patch passes under
+/// dozens of nodes, and this keeps each one to a few points.
+pub(crate) struct CableLine {
+    points: Vec<Pos2>,
+    normals: Vec<Vec2>,
+    /// Across the cable, or the whole bundle, in screen pixels
+    width: f32,
+    color: Color32,
+    /// How lit the cable is at each point, 0 to 1; empty when it's dark
+    light: Vec<f32>,
+    bounds: Rect,
+}
+
+impl CableLine {
+    fn new(path: CablePath, width: f32, color: Color32, light: Vec<f32>) -> Self {
+        let bounds = Rect::from_points(&path.points).expand(width * 0.5 + look::GHOST_FEATHER);
+        Self {
+            normals: path.dirs.iter().map(|d| d.rot90()).collect(),
+            points: path.points,
+            width,
+            color,
+            light,
+            bounds,
+        }
+    }
+
+    /// Adds to `mesh` the stretches of this cable under `rect`, at `strength`
+    /// of its brightness. Nothing is added where the cable only passes near.
+    pub(crate) fn ghost(&self, mesh: &mut Mesh, rect: Rect, strength: f32) {
+        if strength <= 0.0 || !rect.intersects(self.bounds) {
+            return;
+        }
+        let reach = rect.expand(self.width * 0.5 + look::GHOST_FEATHER);
+        let touches = |i: usize| Rect::from_two_pos(self.points[i], self.points[i + 1]).intersects(reach);
+        let segments = self.points.len().saturating_sub(1);
+        let mut i = 0;
+        while i < segments {
+            if !touches(i) {
+                i += 1;
+                continue;
+            }
+            let first = i;
+            while i < segments && touches(i) {
+                i += 1;
+            }
+            self.add_stretch(mesh, first, i, strength);
+        }
+    }
+
+    /// The band from point `first` to `last`: the cable's body with its glow
+    /// folded in, and a lifted core where it's lit, all faded to `strength`
+    fn add_stretch(&self, mesh: &mut Mesh, first: usize, last: usize, strength: f32) {
+        let centers = &self.points[first..=last];
+        let normals = &self.normals[first..=last];
+        let level = |i: usize| self.light.get(first + i).copied().unwrap_or(0.0);
+        let half = self.width * 0.5;
+        // The soft edge straddles the cable's edge, as a stroke's does, and a
+        // cable thinner than it shows only as much as it covers
+        let feather = look::GHOST_FEATHER * 0.5;
+        let (inner, edge) = ((half - feather).max(0.0), half + feather);
+        let strength = strength * (self.width / look::GHOST_FEATHER).min(1.0);
+        let body = shade(self.color, look::BASE_SHADE);
+        add_light_band(mesh, centers, normals, &[(-edge, 0.0), (-inner, 1.0), (inner, 1.0), (edge, 0.0)], |i| {
+            brighten(body, light(self.color, level(i) * look::GLOW_GAIN)).gamma_multiply(strength)
+        });
+        if self.light.is_empty() {
+            return;
+        }
+        let core = half * look::CORE_WIDTH;
+        let core_color = lift(self.color, look::CORE_LIFT);
+        add_light_band(mesh, centers, normals, &[(-core, 0.0), (0.0, 1.0), (core, 0.0)], |i| {
+            light(core_color, level(i) * look::CORE_GAIN).gamma_multiply(strength)
+        });
     }
 }
 
-/// Scale every color a cable's shapes are painted in by `alpha`, as the eye
-/// sees it, so the cable shows at that much of its strength
-pub(crate) fn fade(shape: &mut Shape, alpha: f32) {
-    match shape {
-        Shape::Vec(shapes) => shapes.iter_mut().for_each(|shape| fade(shape, alpha)),
-        Shape::Path(path) => {
-            path.fill = path.fill.gamma_multiply(alpha);
-            if let epaint::ColorMode::Solid(color) = &mut path.stroke.color {
-                *color = color.gamma_multiply(alpha);
-            }
-        }
-        Shape::Circle(circle) => {
-            circle.fill = circle.fill.gamma_multiply(alpha);
-            circle.stroke.color = circle.stroke.color.gamma_multiply(alpha);
-        }
-        Shape::Mesh(mesh) => {
-            for vertex in &mut mesh.vertices {
-                vertex.color = vertex.color.gamma_multiply(alpha);
-            }
-        }
-        _ => {}
-    }
+/// `color` with additive `light` laid over it
+fn brighten(color: Color32, light: Color32) -> Color32 {
+    let [r, g, b, a] = color.to_array();
+    let [lr, lg, lb, la] = light.to_array();
+    Color32::from_rgba_premultiplied(
+        r.saturating_add(lr),
+        g.saturating_add(lg),
+        b.saturating_add(lb),
+        a.saturating_add(la),
+    )
 }
 
-fn draw_mono(out: &mut Vec<Shape>, zoom: f32, color: Color32, path: &CablePath, motion: &Flow, flow: &CableFlow) {
+/// Draws a mono cable, handing back how lit it is along its length (empty
+/// when it's dark)
+fn draw_mono(out: &mut Vec<Shape>, zoom: f32, color: Color32, path: &CablePath, motion: &Flow, flow: &CableFlow) -> Vec<f32> {
     let width = look::CABLE_WIDTH * zoom;
     let rim = Color32::from_black_alpha(look::OUTLINE_ALPHA);
     out.push(Shape::Path(PathShape::line(
@@ -512,12 +584,12 @@ fn draw_mono(out: &mut Vec<Shape>, zoom: f32, color: Color32, path: &CablePath, 
     )));
 
     let Some(trace) = flow.strands.first().copied().flatten() else {
-        return;
+        return Vec::new();
     };
 
     let intensity: Vec<f32> = path.dist.iter().map(|&s| motion.intensity(&trace, s)).collect();
     if intensity.iter().all(|&i| i <= 0.0) {
-        return;
+        return Vec::new();
     }
     // A waveform's light rides beside the cable, at its value
     let normals: Vec<Vec2> = path.dirs.iter().map(|d| d.rot90()).collect();
@@ -565,12 +637,14 @@ fn draw_mono(out: &mut Vec<Shape>, zoom: f32, color: Color32, path: &CablePath, 
         let dir = (at(s + nudge) - at(s - nudge)).normalized();
         draw_glyph(out, flow.glyph, at(s), dir, size, glyph_color, alpha);
     }
+    intensity
 }
 
 /// A polyphonic cable: each strand runs at a fixed offset from the curve,
 /// squeezed together near the ends so the bundle fits into the jacks, and
-/// lights with its own voice
-fn draw_bundle(out: &mut Vec<Shape>, zoom: f32, color: Color32, path: &CablePath, motion: &Flow, flow: &CableFlow) {
+/// lights with its own voice. Hands back how lit the bundle is along its
+/// length (empty when it's dark)
+fn draw_bundle(out: &mut Vec<Shape>, zoom: f32, color: Color32, path: &CablePath, motion: &Flow, flow: &CableFlow) -> Vec<f32> {
     let channels = flow.strands.len();
     let bundle_width = poly_cable::bundle_width(look::CABLE_WIDTH * zoom, channels);
     let spacing = bundle_width / channels as f32;
@@ -635,7 +709,7 @@ fn draw_bundle(out: &mut Vec<Shape>, zoom: f32, color: Color32, path: &CablePath
         .map(|i| bundle_fullness(intensity.iter().map(|strand| strand[i])))
         .collect();
     if fullness.iter().all(|&i| i <= 0.0) {
-        return;
+        return Vec::new();
     }
     let mut mesh = Mesh::default();
     let half = bundle_width * 0.5;
@@ -676,6 +750,7 @@ fn draw_bundle(out: &mut Vec<Shape>, zoom: f32, color: Color32, path: &CablePath
             draw_glyph(out, flow.glyph, pos, dir, size, glyph_color, alpha);
         }
     }
+    fullness
 }
 
 /// How lit a bundle is, 0 to 1, from its strands' brightness: the square
@@ -756,31 +831,45 @@ mod tests {
         assert!((dir.x - 1.0).abs() < 1e-3);
     }
 
-    #[test]
-    fn a_faded_cable_keeps_its_hue_at_a_fraction_of_its_strength() {
-        let mut shapes = Vec::new();
+    fn lit_line(src: Pos2, dst: Pos2) -> CableLine {
         let flow = CableFlow { time: 0.0, glyph: FlowGlyph::Dot, strands: &[Some(SignalTrace::steady(1.0))] };
-        draw_connection(&mut shapes, 1.0, pos2(0.0, 0.0), pos2(200.0, 50.0), Color32::from_rgb(80, 160, 240), &flow);
-        let mut cable = Shape::Vec(shapes);
-        let before = cable.clone();
-        fade(&mut cable, 0.0);
-        let mut colors = Vec::new();
-        fn collect(shape: &Shape, colors: &mut Vec<Color32>) {
-            match shape {
-                Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, colors)),
-                Shape::Path(path) => {
-                    colors.push(path.fill);
-                    if let epaint::ColorMode::Solid(color) = path.stroke.color {
-                        colors.push(color);
-                    }
-                }
-                Shape::Circle(circle) => colors.push(circle.fill),
-                Shape::Mesh(mesh) => colors.extend(mesh.vertices.iter().map(|v| v.color)),
-                _ => {}
-            }
-        }
-        collect(&cable, &mut colors);
-        assert!(!colors.is_empty() && colors.iter().all(|&c| c == Color32::TRANSPARENT));
-        assert_ne!(before, cable);
+        draw_connection(&mut Vec::new(), 1.0, src, dst, Color32::from_rgb(80, 160, 240), &flow)
+    }
+
+    fn ghost_of(line: &CableLine, rect: Rect, strength: f32) -> Mesh {
+        let mut mesh = Mesh::default();
+        line.ghost(&mut mesh, rect, strength);
+        mesh
+    }
+
+    #[test]
+    fn a_node_shows_only_the_stretch_of_cable_under_it() {
+        let line = lit_line(pos2(0.0, 0.0), pos2(400.0, 0.0));
+        let node = Rect::from_min_max(pos2(150.0, -40.0), pos2(250.0, 40.0));
+        let mesh = ghost_of(&line, node, 0.15);
+        assert!(!mesh.is_empty());
+        // A sample past each side of the node at most; the clip trims the rest
+        assert!(mesh.vertices.iter().all(|v| v.pos.x > 140.0 && v.pos.x < 260.0));
+    }
+
+    #[test]
+    fn a_node_inside_a_cables_bounds_but_off_its_path_shows_nothing() {
+        // A long diagonal: its bounding box covers corners it never visits
+        let line = lit_line(pos2(0.0, 0.0), pos2(600.0, 400.0));
+        let corner = Rect::from_min_max(pos2(450.0, 20.0), pos2(580.0, 120.0));
+        assert!(corner.intersects(line.bounds));
+        assert!(ghost_of(&line, corner, 0.15).is_empty());
+    }
+
+    #[test]
+    fn a_ghost_keeps_the_cables_hue_at_a_fraction_of_its_strength() {
+        let line = lit_line(pos2(0.0, 0.0), pos2(400.0, 0.0));
+        let node = Rect::from_min_max(pos2(150.0, -40.0), pos2(250.0, 40.0));
+        let brightest = |strength| ghost_of(&line, node, strength).vertices.iter().map(|v| v.color.b()).max();
+        let (faint, full) = (brightest(0.15).unwrap(), brightest(1.0).unwrap());
+        assert!(faint > 0 && faint < full / 4, "{faint} of {full}");
+        assert!(ghost_of(&line, node, 0.0).is_empty());
+        // A blue cable shows through blue
+        assert!(ghost_of(&line, node, 0.15).vertices.iter().all(|v| v.color.b() >= v.color.r()));
     }
 }
