@@ -49,6 +49,21 @@ pub fn place_port(ui: &Ui, node_id: NodeId, param: AnyParameterId, y: f32) {
     });
 }
 
+/// How big `text` is in `font` if fonts scaled smoothly with the zoom.
+/// epaint draws each font at a whole number of pixels, so text grows in
+/// steps while the rest of the node grows smoothly, and a node sized by its
+/// text saws as the view zooms. Measured at a set size, the same at every
+/// zoom, and scaled from there.
+fn steady_text_size(ui: &Ui, text: &str, font: &FontId) -> Vec2 {
+    // Big enough that rounding it to a pixel hardly matters, small enough
+    // not to fill the font atlas with the glyphs measured
+    const MEASURED_AT: f32 = 24.0;
+    let measured = FontId::new(MEASURED_AT, font.family.clone());
+    let width = ui.fonts(|f| f.layout_no_wrap(text.to_string(), measured.clone(), Color32::WHITE).size().x);
+    let height = ui.fonts(|f| f.row_height(&FontId::new(100.0, font.family.clone()))) / 100.0;
+    vec2(width / MEASURED_AT, height) * font.size
+}
+
 /// Nodes communicate certain events to the parent graph when drawn. There is
 /// one special `User` variant which can be used by users as the return value
 /// when executing some custom actions in the UI of the node.
@@ -860,13 +875,15 @@ where
                 let text_style = self.graph[self.node_id].user_data.titlebar_text_style();
                 let font_id = text_style.resolve(ui.style());
                 let title_color = title_ink.unwrap_or(text_color);
+                let size = steady_text_size(ui, label_text, &font_id);
                 let galley = ui.painter().layout_no_wrap(
                     label_text.to_string(),
                     font_id,
                     title_color,
                 );
-                let label_rect = ui.allocate_space(galley.size()).1;
-                ui.painter().galley(label_rect.min, galley, title_color);
+                let label_rect = ui.allocate_space(size).1;
+                let top = label_rect.center().y - galley.size().y / 2.0;
+                ui.painter().galley(pos2(label_rect.min.x, top), galley, title_color);
 
                 ui.add_space(8.0 * pan_zoom.zoom); // The size of the little cross icon
             });
