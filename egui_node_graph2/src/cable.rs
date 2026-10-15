@@ -133,7 +133,7 @@ impl<'a> SignalTrace<'a> {
 }
 
 /// The look of a cable, in graph units unless noted
-mod look {
+pub(crate) mod look {
     /// Width of a mono cable
     pub const CABLE_WIDTH: f32 = 5.0;
     /// Dark rim around every cable, so crossings and the grid stay distinct
@@ -172,6 +172,17 @@ mod look {
     pub const MAX_SAMPLES: usize = 400;
     /// Soft edge, in screen pixels, of a cable showing through a node
     pub const GHOST_FEATHER: f32 = 1.0;
+    /// How dark the other cables go while one is picked out, at full strength
+    pub const SPOT_DIM: f32 = 0.55;
+    /// How far toward white the picked-out cable is lifted
+    pub const SPOT_LIFT: f32 = 0.3;
+    /// The glow around a picked-out cable, from its edge to where it fades out
+    pub const HALO_REACH: f32 = 9.0;
+    pub const HALO_GAIN: f32 = 0.5;
+    /// How strongly a picked-out cable shows through the nodes it passes under
+    pub const SPOT_THROUGH: f32 = 0.55;
+    /// Screen pixels off a cable's edge that the pointer still counts as on it
+    pub const HOVER_REACH: f32 = 4.0;
 }
 
 /// Polyphonic cable look: one strand per channel, bundled side by side in a
@@ -245,7 +256,7 @@ fn smoothstep(edge: f32, x: f32) -> f32 {
 }
 
 /// Scale a color's brightness, keeping its alpha
-fn shade(color: Color32, factor: f32) -> Color32 {
+pub(crate) fn shade(color: Color32, factor: f32) -> Color32 {
     let scale = |c: u8| (c as f32 * factor).round().clamp(0.0, 255.0) as u8;
     Color32::from_rgba_unmultiplied(scale(color.r()), scale(color.g()), scale(color.b()), color.a())
 }
@@ -505,6 +516,40 @@ impl CableLine {
             light,
             bounds,
         }
+    }
+
+    /// How far `pos` is from the cable's edge, in screen pixels: 0 or less on it
+    pub(crate) fn distance(&self, pos: Pos2) -> f32 {
+        if !self.bounds.expand(look::HOVER_REACH).contains(pos) {
+            return f32::INFINITY;
+        }
+        let nearest = self
+            .points
+            .windows(2)
+            .map(|seg| {
+                let (a, b) = (seg[0], seg[1]);
+                let ab = b - a;
+                let t = ((pos - a).dot(ab) / ab.length_sq().max(f32::EPSILON)).clamp(0.0, 1.0);
+                pos.distance(a + ab * t)
+            })
+            .fold(f32::INFINITY, f32::min);
+        nearest - self.width * 0.5
+    }
+
+    /// A soft glow all along the cable, for the one picked out from the rest,
+    /// at `strength` from 0 to 1. It's drawn under the cable
+    pub(crate) fn halo(&self, zoom: f32, strength: f32) -> Shape {
+        let mut mesh = Mesh::default();
+        let half = self.width * 0.5;
+        let reach = half + look::HALO_REACH * zoom;
+        add_light_band(
+            &mut mesh,
+            &self.points,
+            &self.normals,
+            &[(-reach, 0.0), (-half, 1.0), (half, 1.0), (reach, 0.0)],
+            |_| light(lift(self.color, look::SPOT_LIFT), strength * look::HALO_GAIN),
+        );
+        Shape::mesh(mesh)
     }
 
     /// Adds to `mesh` the stretches of this cable under `rect`, at `strength`
@@ -840,6 +885,17 @@ mod tests {
         let mut mesh = Mesh::default();
         line.ghost(&mut mesh, rect, strength);
         mesh
+    }
+
+    #[test]
+    fn the_pointer_is_on_a_cable_along_its_curve_not_its_bounds() {
+        let line = lit_line(pos2(0.0, 0.0), pos2(400.0, 0.0));
+        assert!(line.distance(pos2(200.0, 1.0)) <= 0.0);
+        assert!(line.distance(pos2(200.0, 2.5 + look::HOVER_REACH - 0.5)) <= look::HOVER_REACH);
+        assert!(line.distance(pos2(200.0, 20.0)) > look::HOVER_REACH);
+        // Inside a diagonal's bounding box, but nowhere near the cable
+        let diagonal = lit_line(pos2(0.0, 0.0), pos2(600.0, 400.0));
+        assert!(diagonal.distance(pos2(560.0, 40.0)) > look::HOVER_REACH);
     }
 
     #[test]

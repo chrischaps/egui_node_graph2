@@ -5,7 +5,7 @@ use crate::color_hex_utils::*;
 use crate::utils::ColorUtils;
 
 use super::*;
-use crate::cable::{draw_connection, poly_cable, CableFlow};
+use crate::cable::{draw_connection, look as cable_look, poly_cable, shade, CableFlow};
 use egui::epaint::RectShape;
 use egui::*;
 
@@ -128,6 +128,9 @@ pub struct GraphResponse<UserResponse: UserResponseTrait, NodeData: NodeDataTrai
     pub cursor_in_editor: bool,
     /// Is the mouse currently hovering the node finder?
     pub cursor_in_finder: bool,
+    /// The cable under the pointer, named by the input it plugs into. Only
+    /// over the bare canvas: a cable under a node isn't hovered there
+    pub hovered_cable: Option<InputId>,
 }
 impl<UserResponse: UserResponseTrait, NodeData: NodeDataTrait> Default
     for GraphResponse<UserResponse, NodeData>
@@ -137,6 +140,7 @@ impl<UserResponse: UserResponseTrait, NodeData: NodeDataTrait> Default
             node_responses: Default::default(),
             cursor_in_editor: false,
             cursor_in_finder: false,
+            hovered_cable: None,
         }
     }
 }
@@ -522,6 +526,21 @@ where
         // A cable to or from a node that isn't shown isn't drawn either
         let mut cables = Vec::new();
         let mut lines = Vec::new();
+        // The cable the app picks out, if it's shown: it glows, over the
+        // rest, and they dim
+        let shown = |input: InputId, output: OutputId| {
+            conn_locations.contains_key(&input)
+                && port_locations.contains_key(&AnyParameterId::Output(output))
+        };
+        let spotlight = user_state.cable_spotlight().filter(|&(input, strength)| {
+            strength > 0.0
+                && self
+                    .graph
+                    .connections(input)
+                    .into_iter()
+                    .any(|output| shown(input, output))
+        });
+        let mut spotlit = Vec::new();
         for (input, outputs) in self.graph.iter_connection_groups() {
             for (hook_n, &output) in outputs.iter().enumerate() {
                 // outputs can't be wide yet so this is fine.
@@ -538,7 +557,18 @@ where
                     .graph
                     .any_param_type(AnyParameterId::Output(output))
                     .unwrap();
-                let connection_color = port_type.data_type_color(user_state);
+                let mut connection_color = port_type.data_type_color(user_state);
+                let lit = match spotlight {
+                    Some((spot, strength)) if spot == input => Some(strength.min(1.0)),
+                    Some((_, strength)) => {
+                        connection_color = shade(
+                            connection_color,
+                            1.0 - cable_look::SPOT_DIM * strength.min(1.0),
+                        );
+                        None
+                    }
+                    None => None,
+                };
 
                 // One strand per channel, each with its own voice's trace
                 let node = self.graph.get_output(output).node;
@@ -556,7 +586,7 @@ where
                 }
 
                 let mut shapes = Vec::new();
-                lines.push(draw_connection(
+                let line = draw_connection(
                     &mut shapes,
                     self.pan_zoom.zoom,
                     src_pos,
@@ -567,18 +597,52 @@ where
                         glyph,
                         strands: &strands[..channels],
                     },
-                ));
-                cables.push(Shape::Vec(shapes));
+                );
+                match lit {
+                    Some(strength) => {
+                        shapes.insert(0, line.halo(self.pan_zoom.zoom, strength));
+                        spotlit.push(Shape::Vec(shapes));
+                    }
+                    None => cables.push(Shape::Vec(shapes)),
+                }
+                lines.push((input, line));
             }
         }
+        cables.append(&mut spotlit);
+
+        // The cable under the pointer, where nothing else is: not over a
+        // node, nor while a cable is being dragged
+        let hovered_cable = (cursor_in_editor
+            && !cursor_in_finder
+            && self.connection_in_progress.is_none()
+            && !node_rects.values().any(|rect| rect.contains(cursor_pos)))
+        .then(|| {
+            lines
+                .iter()
+                .map(|(input, line)| (*input, line.distance(cursor_pos)))
+                .filter(|&(_, distance)| distance <= cable_look::HOVER_REACH)
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(input, _)| input)
+        })
+        .flatten();
 
         // Where a cable passes under a node it still shows faintly through
         // the node's face, so the route can be followed without the cable
         // covering the controls. Each node's share is one mesh
         let through = user_state.cable_through_node().clamp(0.0, 1.0);
-        for &node_rect in node_rects.values().filter(|_| through > 0.0) {
+        for &node_rect in node_rects
+            .values()
+            .filter(|_| through > 0.0 || spotlight.is_some())
+        {
             let mut ghosts = epaint::Mesh::default();
-            for line in &lines {
+            for (input, line) in &lines {
+                // The picked-out cable's route shows through more clearly
+                let through = match spotlight {
+                    Some((spot, strength)) if spot == *input => {
+                        through.max(cable_look::SPOT_THROUGH * strength.min(1.0))
+                    }
+                    _ => through,
+                };
                 line.ghost(&mut ghosts, node_rect, through);
             }
             if !ghosts.is_empty() {
@@ -739,6 +803,7 @@ where
             node_responses: delayed_responses,
             cursor_in_editor,
             cursor_in_finder,
+            hovered_cable,
         }
     }
 }

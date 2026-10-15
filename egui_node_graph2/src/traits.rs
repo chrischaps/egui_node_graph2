@@ -398,6 +398,14 @@ pub trait ConnectionSignalTrait {
         0.15
     }
 
+    /// A cable to pick out from the rest, named by the input it plugs into,
+    /// and how strongly, from 0 to 1: that cable glows and the others dim
+    /// by as much. Nothing dims while no cable into the input is shown.
+    /// Default is none.
+    fn cable_spotlight(&self) -> Option<(InputId, f32)> {
+        None
+    }
+
     /// Get the color for an output port, allowing signal-based visual feedback.
     ///
     /// This method is called when rendering output ports and allows the application
