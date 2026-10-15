@@ -49,6 +49,18 @@ pub fn place_port(ui: &Ui, node_id: NodeId, param: AnyParameterId, y: f32) {
     });
 }
 
+/// Where a node's background was last drawn, on screen: its title bar to its
+/// rounded foot. The node's window response stops short of the foot, which
+/// hangs below the content by half the title bar's height. A node that isn't
+/// drawn any more keeps the rect it was last drawn at.
+pub fn drawn_node_rect(ctx: &egui::Context, node_id: NodeId) -> Option<Rect> {
+    ctx.data(|data| data.get_temp::<Rect>(drawn_rect_id(node_id)))
+}
+
+fn drawn_rect_id(node_id: NodeId) -> Id {
+    Id::new((node_id, "drawn_rect"))
+}
+
 /// How big `text` is in `font` if fonts scaled smoothly with the zoom.
 /// epaint draws each font at a whole number of pixels, so text grows in
 /// steps while the rest of the node grows smoothly, and a node sized by its
@@ -1389,6 +1401,8 @@ where
 
             // Take note of the node rect, so the editor can use it later to compute intersections.
             self.node_rects.insert(self.node_id, node_rect);
+            ui.ctx()
+                .data_mut(|data| data.insert_temp(drawn_rect_id(self.node_id), node_rect));
 
             (Shape::Vec(vec![titlebar, body, bottom_body]), outline)
         };
