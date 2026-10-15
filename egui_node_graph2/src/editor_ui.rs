@@ -61,6 +61,17 @@ fn drawn_rect_id(node_id: NodeId) -> Id {
     Id::new((node_id, "drawn_rect"))
 }
 
+/// Where a port's jack was last drawn, on screen: the rect that takes its
+/// clicks and drags. A port that isn't drawn any more keeps the rect it was
+/// last drawn at.
+pub fn drawn_port_rect(ctx: &egui::Context, param_id: AnyParameterId) -> Option<Rect> {
+    ctx.data(|data| data.get_temp::<Rect>(drawn_port_rect_id(param_id)))
+}
+
+fn drawn_port_rect_id(param_id: AnyParameterId) -> Id {
+    Id::new((param_id, "drawn_port_rect"))
+}
+
 /// How big `text` is in `font` if fonts scaled smoothly with the zoom.
 /// epaint draws each font at a whole number of pixels, so text grows in
 /// steps while the rest of the node grows smoothly, and a node sized by its
@@ -1227,6 +1238,8 @@ where
             };
 
             let resp = ui.allocate_rect(port_rect, sense);
+            ui.ctx()
+                .data_mut(|data| data.insert_temp(drawn_port_rect_id(param_id), port_rect));
 
             // Check if the distance between the port and the mouse is the distance to connect
             let close_enough = if let Some(pointer_pos) = ui.ctx().pointer_hover_pos() {
