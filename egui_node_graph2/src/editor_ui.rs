@@ -528,9 +528,15 @@ where
             ui.painter().extend(shapes);
         }
 
-        // The signal flows through the cables continuously
-        let time = ui.ctx().input(|i| i.time);
-        ui.ctx().request_repaint();
+        // The signal flows through the cables while it plays, and holds
+        // still while it doesn't, asking for no frames
+        let time = match user_state.flow_frame() {
+            Some(after) => {
+                ui.ctx().request_repaint_after(after);
+                ui.ctx().input(|i| i.time)
+            }
+            None => 0.0,
+        };
         let glyph = user_state.flow_glyph();
 
         // draw existing connections, each showing its signal's recent past.

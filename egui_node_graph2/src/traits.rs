@@ -392,6 +392,13 @@ pub trait ConnectionSignalTrait {
         FlowGlyph::default()
     }
 
+    /// How soon the next frame of the flow along the cables is wanted, or
+    /// `None` while nothing flows, when the marks hold still and the editor
+    /// asks for no frames of its own. Default is at once, every frame.
+    fn flow_frame(&self) -> Option<std::time::Duration> {
+        Some(std::time::Duration::ZERO)
+    }
+
     /// How strongly a cable shows through a node it passes under, from 0
     /// (not at all) to 1 (as strongly as over the canvas). Default is 0.15.
     fn cable_through_node(&self) -> f32 {
