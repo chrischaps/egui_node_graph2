@@ -52,9 +52,18 @@ pub trait WidgetValueTrait: Default {
 /// This trait must be implemented by the `DataType` generic parameter of the
 /// [`Graph`]. This trait tells the library how to visually expose data types
 /// to the user.
-pub trait DataTypeTrait<UserState>: PartialEq + Eq {
+pub trait DataTypeTrait<UserState>: PartialEq {
     /// The associated port color of this datatype
     fn data_type_color(&self, user_state: &mut UserState) -> egui::Color32;
+
+    /// Whether an output of this type may feed an input of type `to`. The
+    /// editor asks this, always as (output, input), to decide which ports a
+    /// dragged cable lights up and snaps to, and whether letting go connects.
+    /// Override it when some types may feed others but not the other way
+    /// round; the default is plain equality.
+    fn can_connect(&self, to: &Self) -> bool {
+        self == to
+    }
 
     /// The name of this datatype. Return type is specified as Cow<str> because
     /// some implementations will need to allocate a new string to provide an

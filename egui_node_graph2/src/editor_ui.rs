@@ -441,6 +441,7 @@ where
             >(
                 graph: &Graph<NodeData, DataType, ValueType>,
                 port_type: &DataType,
+                from_output: bool,
                 ports: &SlotMap<Key, Value>,
                 port_locations: &PortLocations,
                 cursor_pos: Pos2,
@@ -448,9 +449,16 @@ where
                 ports
                     .iter()
                     .find_map(|(port_id, _)| {
+                        // Always asked as (output, input)
                         let compatible_ports = graph
                             .any_param_type(port_id.into())
-                            .map(|other| other == port_type)
+                            .map(|other| {
+                                if from_output {
+                                    port_type.can_connect(other)
+                                } else {
+                                    other.can_connect(port_type)
+                                }
+                            })
                             .unwrap_or(false);
 
                         if compatible_ports {
@@ -481,6 +489,7 @@ where
                     snap_to_ports(
                         &self.graph,
                         port_type,
+                        true,
                         &self.graph.inputs,
                         &port_locations,
                         cursor_pos,
@@ -490,6 +499,7 @@ where
                     snap_to_ports(
                         &self.graph,
                         port_type,
+                        false,
                         &self.graph.outputs,
                         &port_locations,
                         cursor_pos,
@@ -1333,7 +1343,13 @@ where
             if let Some((origin_node, origin_param)) = ongoing_drag {
                 if origin_node != node_id {
                     // Don't allow self-loops
-                    if graph.any_param_type(origin_param).unwrap() == port_type && close_enough {
+                    let origin_type = graph.any_param_type(origin_param).unwrap();
+                    // Always asked as (output, input)
+                    let compatible = match origin_param {
+                        AnyParameterId::Output(_) => origin_type.can_connect(port_type),
+                        AnyParameterId::Input(_) => port_type.can_connect(origin_type),
+                    };
+                    if compatible && close_enough {
                         match (param_id, origin_param) {
                             (AnyParameterId::Input(input), AnyParameterId::Output(output))
                             | (AnyParameterId::Output(output), AnyParameterId::Input(input)) => {
