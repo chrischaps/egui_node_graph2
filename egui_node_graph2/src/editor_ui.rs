@@ -766,6 +766,7 @@ where
                 2.0,
                 bg_color,
                 Stroke::new(3.0, stroke_color),
+                egui::StrokeKind::Middle,
             );
 
             self.selected_nodes = node_rects
@@ -861,11 +862,11 @@ where
         ui: &mut Ui,
         user_state: &mut UserState,
     ) -> Vec<NodeResponse<UserResponse, NodeData>> {
-        let mut child_ui = ui.child_ui_with_id_source(
-            Rect::from_min_size(*self.position + self.pan, Self::MAX_NODE_SIZE.into()),
-            Layout::default(),
-            self.node_id,
-            None,
+        let mut child_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(Rect::from_min_size(*self.position + self.pan, Self::MAX_NODE_SIZE.into()))
+                .layout(Layout::default())
+                .id_salt(self.node_id),
         );
 
         Self::show_graph_node(self, pan_zoom, &mut child_ui, user_state)
@@ -918,7 +919,7 @@ where
         inner_rect.max.x = inner_rect.max.x.max(inner_rect.min.x);
         inner_rect.max.y = inner_rect.max.y.max(inner_rect.min.y);
 
-        let mut child_ui = ui.child_ui(inner_rect, *ui.layout(), None);
+        let mut child_ui = ui.new_child(egui::UiBuilder::new().max_rect(inner_rect).layout(*ui.layout()));
 
         // Get interaction rect from memory, it may expand after the window response on resize.
         let interaction_rect = ui
@@ -997,7 +998,7 @@ where
             if debug_layout {
                 let title_rect_after = ui.min_rect();
                 let title_contribution = Rect::from_min_max(title_rect_before.min, pos2(title_rect_after.max.x, title_rect_after.min.y + title_height));
-                ui.painter().rect_stroke(title_contribution, 0.0, Stroke::new(2.0, debug_colors[0]));
+                ui.painter().rect_stroke(title_contribution, 0.0, Stroke::new(2.0, debug_colors[0]), egui::StrokeKind::Middle);
             }
 
             // First pass: Draw the inner fields. Compute port heights
@@ -1082,7 +1083,7 @@ where
             // Debug: draw rect showing inputs section
             if debug_layout {
                 let inputs_rect = ui.min_rect();
-                ui.painter().rect_stroke(inputs_rect, 0.0, Stroke::new(2.0, Color32::GREEN));
+                ui.painter().rect_stroke(inputs_rect, 0.0, Stroke::new(2.0, Color32::GREEN), egui::StrokeKind::Middle);
             }
 
             let outputs = self.graph[self.node_id].outputs.clone();
@@ -1107,6 +1108,7 @@ where
                         Rect::from_min_size(pos2(outputs_start_rect.min.x, height_before), vec2(width_after, 20.0)),
                         0.0,
                         Stroke::new(3.0, Color32::from_rgb(255, 0, 255)), // Magenta for width expansion
+                        egui::StrokeKind::Middle,
                     );
                 }
 
@@ -1141,10 +1143,10 @@ where
                     pos2(bottom_ui_after.min.x, bottom_ui_before.max.y),
                     bottom_ui_after.max
                 );
-                ui.painter().rect_stroke(bottom_area, 0.0, Stroke::new(2.0, Color32::BLUE));
+                ui.painter().rect_stroke(bottom_area, 0.0, Stroke::new(2.0, Color32::BLUE), egui::StrokeKind::Middle);
 
                 // Draw yellow for final min_rect
-                ui.painter().rect_stroke(bottom_ui_after, 0.0, Stroke::new(1.0, Color32::YELLOW));
+                ui.painter().rect_stroke(bottom_ui_after, 0.0, Stroke::new(1.0, Color32::YELLOW), egui::StrokeKind::Middle);
             }
         });
 
@@ -1155,7 +1157,7 @@ where
 
         // Debug: show final outer_rect in cyan
         if debug_layout {
-            ui.painter().rect_stroke(outer_rect, 0.0, Stroke::new(3.0, Color32::from_rgb(0, 255, 255)));
+            ui.painter().rect_stroke(outer_rect, 0.0, Stroke::new(3.0, Color32::from_rgb(0, 255, 255)), egui::StrokeKind::Middle);
         }
         let port_left = outer_rect.left();
         let port_right = outer_rect.right();
@@ -1438,22 +1440,23 @@ where
 
         let (shape, outline) = {
             let rounding_radius = 4.0 * pan_zoom.zoom;
-            let rounding = Rounding::same(rounding_radius);
+            let rounding = egui::CornerRadius::same(rounding_radius.round().clamp(0.0, 255.0) as u8);
 
             let titlebar_height = title_height + margin.y;
             let titlebar_rect =
                 Rect::from_min_size(outer_rect.min, vec2(outer_rect.width(), titlebar_height));
             let titlebar = Shape::Rect(RectShape {
                 rect: titlebar_rect,
-                rounding,
+                corner_radius: rounding,
                 fill: self.graph[self.node_id]
                     .user_data
                     .titlebar_color(ui, self.node_id, self.graph, user_state)
                     .unwrap_or_else(|| background_color.lighten(0.8)),
                 stroke: Stroke::NONE,
+                stroke_kind: egui::StrokeKind::Middle,
                 blur_width: 0.0,
-                fill_texture_id: Default::default(),
-                uv: Rect::ZERO,
+                    round_to_pixels: None,
+                    brush: None,
             });
 
             let body_rect = Rect::from_min_size(
@@ -1462,12 +1465,13 @@ where
             );
             let body = Shape::Rect(RectShape {
                 rect: body_rect,
-                rounding: Rounding::ZERO,
+                corner_radius: egui::CornerRadius::ZERO,
                 fill: background_color,
                 stroke: Stroke::NONE,
+                stroke_kind: egui::StrokeKind::Middle,
                 blur_width: 0.0,
-                fill_texture_id: Default::default(),
-                uv: Rect::ZERO,
+                    round_to_pixels: None,
+                    brush: None,
             });
 
             let bottom_body_rect = Rect::from_min_size(
@@ -1476,24 +1480,26 @@ where
             );
             let bottom_body = Shape::Rect(RectShape {
                 rect: bottom_body_rect,
-                rounding,
+                corner_radius: rounding,
                 fill: background_color,
                 stroke: Stroke::NONE,
+                stroke_kind: egui::StrokeKind::Middle,
                 blur_width: 0.0,
-                fill_texture_id: Default::default(),
-                uv: Rect::ZERO,
+                    round_to_pixels: None,
+                    brush: None,
             });
 
             let node_rect = titlebar_rect.union(body_rect).union(bottom_body_rect);
             let outline = if self.selected {
                 Shape::Rect(RectShape {
                     rect: node_rect.expand(1.0 * pan_zoom.zoom),
-                    rounding,
+                    corner_radius: rounding,
                     fill: Color32::WHITE.lighten(0.8),
                     stroke: Stroke::NONE,
+                    stroke_kind: egui::StrokeKind::Middle,
                     blur_width: 0.0,
-                    fill_texture_id: Default::default(),
-                    uv: Rect::ZERO,
+                    round_to_pixels: None,
+                    brush: None,
                 })
             } else {
                 Shape::Noop
