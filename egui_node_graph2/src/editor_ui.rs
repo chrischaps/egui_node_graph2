@@ -34,7 +34,7 @@ const DISTANCE_TO_CONNECT: f32 = 10.0;
 struct PlacedPorts(Vec<(AnyParameterId, f32)>);
 
 fn placed_ports_id(node_id: NodeId) -> Id {
-    Id::new((node_id, "placed_ports"))
+    Id::unique((node_id, "placed_ports"))
 }
 
 /// Reports where a port the node lays out itself goes: its jack is drawn on
@@ -58,7 +58,7 @@ pub fn drawn_node_rect(ctx: &egui::Context, node_id: NodeId) -> Option<Rect> {
 }
 
 fn drawn_rect_id(node_id: NodeId) -> Id {
-    Id::new((node_id, "drawn_rect"))
+    Id::unique((node_id, "drawn_rect"))
 }
 
 /// Where a port's jack was last drawn, on screen: the rect that takes its
@@ -69,7 +69,7 @@ pub fn drawn_port_rect(ctx: &egui::Context, param_id: AnyParameterId) -> Option<
 }
 
 fn drawn_port_rect_id(param_id: AnyParameterId) -> Id {
-    Id::new((param_id, "drawn_port_rect"))
+    Id::unique((param_id, "drawn_port_rect"))
 }
 
 /// How big `text` is in `font` if fonts scaled smoothly with the zoom.
@@ -380,7 +380,7 @@ where
         /* Draw the node finder, if open */
         let mut should_close_node_finder = false;
         if let Some(ref mut node_finder) = self.node_finder {
-            let mut node_finder_area = Area::new(Id::new("node_finder")).order(Order::Foreground);
+            let mut node_finder_area = Area::new(Id::unique("node_finder")).order(Order::Foreground);
             if let Some(pos) = node_finder.position {
                 node_finder_area = node_finder_area.current_pos(pos);
             }
@@ -926,7 +926,7 @@ where
             .ctx()
             .memory_mut(|mem| {
                 mem.data
-                    .get_temp::<OuterRectMemory>(child_ui.id())
+                    .get_temp::<OuterRectMemory>(child_ui.scope_id())
                     .map(|stored| stored.0)
             })
             .unwrap_or(outer_rect_bounds);
@@ -934,7 +934,7 @@ where
         // before creating the node content.
         let window_response = ui.interact(
             interaction_rect,
-            Id::new((self.node_id, "window")),
+            Id::unique((self.node_id, "window")),
             Sense::click_and_drag(),
         );
 
@@ -1187,7 +1187,7 @@ where
         // Save expanded rect to memory.
         ui.ctx().memory_mut(|mem| {
             mem.data
-                .insert_temp(child_ui.id(), OuterRectMemory(outer_rect))
+                .insert_temp(child_ui.scope_id(), OuterRectMemory(outer_rect))
         });
 
         fn port_height(wide_port: bool, connections: usize, max_connections: usize, zoom: f32) -> f32 {
