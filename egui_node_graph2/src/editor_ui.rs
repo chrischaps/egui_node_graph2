@@ -82,8 +82,8 @@ fn steady_text_size(ui: &Ui, text: &str, font: &FontId) -> Vec2 {
     // not to fill the font atlas with the glyphs measured
     const MEASURED_AT: f32 = 24.0;
     let measured = FontId::new(MEASURED_AT, font.family.clone());
-    let width = ui.fonts(|f| f.layout_no_wrap(text.to_string(), measured.clone(), Color32::WHITE).size().x);
-    let height = ui.fonts(|f| f.row_height(&FontId::new(100.0, font.family.clone()))) / 100.0;
+    let width = ui.fonts_mut(|f| f.layout_no_wrap(text.to_string(), measured.clone(), Color32::WHITE).size().x);
+    let height = ui.fonts_mut(|f| f.row_height(&FontId::new(100.0, font.family.clone()))) / 100.0;
     vec2(width / MEASURED_AT, height) * font.size
 }
 
