@@ -7,8 +7,11 @@ use crate::scale::Scale;
 #[cfg(feature = "persistence")]
 use serde::{Deserialize, Serialize};
 
-const MIN_ZOOM: f32 = 0.2;
-const MAX_ZOOM: f32 = 2.0;
+/// The furthest the editor zooms out.
+pub const MIN_ZOOM: f32 = 0.2;
+/// The closest the editor zooms in: near enough for one module's knobs
+/// and displays to fill the screen.
+pub const MAX_ZOOM: f32 = 5.0;
 
 #[derive(Clone)]
 #[cfg_attr(feature = "persistence", derive(Serialize, Deserialize))]

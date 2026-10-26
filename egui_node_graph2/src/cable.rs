@@ -468,7 +468,10 @@ pub(crate) fn draw_connection(
     color: Color32,
     flow: &CableFlow,
 ) -> CableLine {
-    let control_scale = ((dst_pos.x - src_pos.x) * zoom / 2.0).max(30.0 * zoom);
+    // The ports are on screen, already zoomed: zooming the reach again bent
+    // the cable as the view zoomed, until past 2x its handles crossed and it
+    // looped back on itself
+    let control_scale = ((dst_pos.x - src_pos.x) / 2.0).max(30.0 * zoom);
     let curve = [
         src_pos,
         src_pos + Vec2::X * control_scale,
