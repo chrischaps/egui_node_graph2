@@ -49,6 +49,14 @@ pub fn place_port(ui: &Ui, node_id: NodeId, param: AnyParameterId, y: f32) {
     });
 }
 
+/// Reports that a port the node lays out itself isn't shown this frame: no
+/// jack is drawn for it, and nothing can be patched to it. For a port the
+/// node has no use for as it stands (a button its device doesn't have).
+/// Hide only a port without connections: theirs would have nowhere to go.
+pub fn hide_port(ui: &Ui, node_id: NodeId, param: AnyParameterId) {
+    place_port(ui, node_id, param, f32::NAN);
+}
+
 /// Where a node's background was last drawn, on screen: its title bar to its
 /// rounded foot. The node's window response stops short of the foot, which
 /// hangs below the content by half the title bar's height. A node that isn't
@@ -1385,7 +1393,7 @@ where
                 InputParamKind::ConnectionOnly => true,
                 InputParamKind::ConstantOnly => false,
                 InputParamKind::ConnectionOrConstant => true,
-            };
+            } && !port_height.is_nan();
 
             if should_draw {
                 let pos_left = pos2(port_left, port_height);
@@ -1415,6 +1423,9 @@ where
         // Output ports
         for (_, param) in self.graph[self.node_id].outputs.iter() {
             let port_height = port_y(AnyParameterId::Output(*param), &output_rows);
+            if port_height.is_nan() {
+                continue;
+            }
             let pos_right = pos2(port_right, port_height);
             draw_port(
                 pan_zoom,

@@ -223,7 +223,8 @@ where
     /// of its own (no value widget, no `output_ui`): its jack is drawn on the
     /// node's left edge (an input) or right edge (an output), at the height
     /// the node reports with [`crate::place_port`] while drawing its UI this
-    /// frame. A placed port that isn't reported sits at the node's foot.
+    /// frame, or hides with [`crate::hide_port`]. A placed port that isn't
+    /// reported sits at the node's foot.
     ///
     /// Default implementation places nothing.
     fn places_port(
