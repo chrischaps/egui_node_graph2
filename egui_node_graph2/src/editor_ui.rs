@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::num::NonZeroU32;
 
 use crate::color_hex_utils::*;
-use crate::utils::ColorUtils;
+use crate::utils::{layer_points_per_point, layer_pointer, on_screen, ColorUtils};
 
 use super::*;
 use crate::cable::{draw_connection, look as cable_look, poly_cable, shade, CableFlow};
@@ -225,20 +225,14 @@ where
         prepend_responses: Vec<NodeResponse<UserResponse, NodeData>>,
     ) -> GraphResponse<UserResponse, NodeData> {
         ui.set_clip_rect(ui.max_rect());
-        let clip_rect = ui.clip_rect();
         // Zoom may have never taken place, so ensure we use parent style
         if !self.pan_zoom.started {
             self.zoom(ui, 1.0);
             self.pan_zoom.started = true;
         }
 
-        // Zoom only within area where graph is shown
-        if ui.rect_contains_pointer(clip_rect) {
-            let scroll_delta = ui.input(|i| i.smooth_scroll_delta.y);
-            if scroll_delta != 0.0 {
-                let zoom_delta = (scroll_delta * 0.002).exp();
-                self.zoom(ui, zoom_delta);
-            }
+        if !self.app_zooms {
+            self.zoom_with_wheel(ui);
         }
 
         // Render graph zoomed
@@ -248,6 +242,18 @@ where
         });
 
         graph_response
+    }
+
+    /// Zooms with the mouse wheel, while it's over `ui`'s clip rect: what
+    /// [`Self::draw_graph_editor`] does unless the app zooms (`app_zooms`)
+    pub fn zoom_with_wheel(&mut self, ui: &Ui) {
+        if ui.rect_contains_pointer(ui.clip_rect()) {
+            let scroll_delta = ui.input(|i| i.smooth_scroll_delta.y);
+            if scroll_delta != 0.0 {
+                let zoom_delta = (scroll_delta * 0.002).exp();
+                self.zoom(ui, zoom_delta);
+            }
+        }
     }
 
     /// Reset zoom to 1.0
@@ -295,9 +301,9 @@ where
         let editor_rect = ui.max_rect();
         let resp = ui.allocate_rect(editor_rect, Sense::hover());
 
-        let cursor_pos = ui
-            .ctx()
-            .input(|i| i.pointer.hover_pos().unwrap_or(Pos2::ZERO));
+        let cursor_pos = layer_pointer(ui).unwrap_or(Pos2::ZERO);
+        // Reaches are meant in screen points, whatever the layer's scale
+        let reach = layer_points_per_point(ui);
         let mut cursor_in_editor = resp.contains_pointer();
         let mut cursor_in_finder = false;
 
@@ -453,6 +459,7 @@ where
                 ports: &SlotMap<Key, Value>,
                 port_locations: &PortLocations,
                 cursor_pos: Pos2,
+                reach: f32,
             ) -> Pos2 {
                 ports
                     .iter()
@@ -480,7 +487,7 @@ where
                                             .unwrap()
                                     })
                                     .filter(|nearest_hook| {
-                                        nearest_hook.distance(cursor_pos) < DISTANCE_TO_CONNECT
+                                        nearest_hook.distance(cursor_pos) < DISTANCE_TO_CONNECT * reach
                                     })
                                     .copied()
                             })
@@ -501,6 +508,7 @@ where
                         &self.graph.inputs,
                         &port_locations,
                         cursor_pos,
+                        reach,
                     ),
                 ),
                 AnyParameterId::Input(_) => (
@@ -511,6 +519,7 @@ where
                         &self.graph.outputs,
                         &port_locations,
                         cursor_pos,
+                        reach,
                     ),
                     start_pos,
                 ),
@@ -654,8 +663,8 @@ where
         .then(|| {
             lines
                 .iter()
-                .map(|(input, line)| (*input, line.distance(cursor_pos)))
-                .filter(|&(_, distance)| distance <= cable_look::HOVER_REACH)
+                .map(|(input, line)| (*input, line.distance(cursor_pos, cable_look::HOVER_REACH * reach)))
+                .filter(|&(_, distance)| distance <= cable_look::HOVER_REACH * reach)
                 .min_by(|a, b| a.1.total_cmp(&b.1))
                 .map(|(input, _)| input)
         })
@@ -815,7 +824,7 @@ where
                 .ctx()
                 .input(|i| i.pointer.middle_down() || i.modifiers.command_only())
         {
-            self.pan_zoom.pan += ui.ctx().input(|i| i.pointer.delta());
+            self.pan_zoom.pan += ui.ctx().input(|i| i.pointer.delta()) * reach;
         }
 
         // Deselect and deactivate finder if the editor background is clicked,
@@ -1264,11 +1273,12 @@ where
             };
 
             let resp = ui.allocate_rect(port_rect, sense);
+            let on_screen = on_screen(ui, port_rect);
             ui.ctx()
-                .data_mut(|data| data.insert_temp(drawn_port_rect_id(param_id), port_rect));
+                .data_mut(|data| data.insert_temp(drawn_port_rect_id(param_id), on_screen));
 
             // Check if the distance between the port and the mouse is the distance to connect
-            let close_enough = if let Some(pointer_pos) = ui.ctx().pointer_hover_pos() {
+            let close_enough = if let Some(pointer_pos) = layer_pointer(ui) {
                 port_rect.center().distance(pointer_pos) < DISTANCE_TO_CONNECT * pan_zoom.zoom
             } else {
                 false
@@ -1313,8 +1323,7 @@ where
                 }
             }
 
-            let nearest_hook = ui
-                .input(|in_state| in_state.pointer.hover_pos())
+            let nearest_hook = layer_pointer(ui)
                 .and_then(|mouse_pos| match param_id {
                     AnyParameterId::Input(input) => Some((mouse_pos, input)),
                     AnyParameterId::Output(_) => None,
@@ -1522,8 +1531,9 @@ where
 
             // Take note of the node rect, so the editor can use it later to compute intersections.
             self.node_rects.insert(self.node_id, node_rect);
+            let on_screen = on_screen(ui, node_rect);
             ui.ctx()
-                .data_mut(|data| data.insert_temp(drawn_rect_id(self.node_id), node_rect));
+                .data_mut(|data| data.insert_temp(drawn_rect_id(self.node_id), on_screen));
 
             (Shape::Vec(vec![titlebar, body, bottom_body]), outline)
         };

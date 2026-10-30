@@ -521,9 +521,10 @@ impl CableLine {
         }
     }
 
-    /// How far `pos` is from the cable's edge, in screen pixels: 0 or less on it
-    pub(crate) fn distance(&self, pos: Pos2) -> f32 {
-        if !self.bounds.expand(look::HOVER_REACH).contains(pos) {
+    /// How far `pos` is from the cable's edge: 0 or less on it, and infinite
+    /// further than `reach` from its bounds
+    pub(crate) fn distance(&self, pos: Pos2, reach: f32) -> f32 {
+        if !self.bounds.expand(reach).contains(pos) {
             return f32::INFINITY;
         }
         let nearest = self
@@ -893,12 +894,15 @@ mod tests {
     #[test]
     fn the_pointer_is_on_a_cable_along_its_curve_not_its_bounds() {
         let line = lit_line(pos2(0.0, 0.0), pos2(400.0, 0.0));
-        assert!(line.distance(pos2(200.0, 1.0)) <= 0.0);
-        assert!(line.distance(pos2(200.0, 2.5 + look::HOVER_REACH - 0.5)) <= look::HOVER_REACH);
-        assert!(line.distance(pos2(200.0, 20.0)) > look::HOVER_REACH);
+        let reach = look::HOVER_REACH;
+        assert!(line.distance(pos2(200.0, 1.0), reach) <= 0.0);
+        assert!(line.distance(pos2(200.0, 2.5 + reach - 0.5), reach) <= reach);
+        assert!(line.distance(pos2(200.0, 20.0), reach) > reach);
         // Inside a diagonal's bounding box, but nowhere near the cable
         let diagonal = lit_line(pos2(0.0, 0.0), pos2(600.0, 400.0));
-        assert!(diagonal.distance(pos2(560.0, 40.0)) > look::HOVER_REACH);
+        assert!(diagonal.distance(pos2(560.0, 40.0), reach) > reach);
+        // A longer reach, as on a layer drawn smaller than it's laid out
+        assert!(line.distance(pos2(200.0, 2.5 + 3.0 * reach - 0.5), 3.0 * reach) <= 3.0 * reach);
     }
 
     #[test]

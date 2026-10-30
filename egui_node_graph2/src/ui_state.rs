@@ -34,6 +34,11 @@ pub struct GraphEditorState<NodeData, DataType, ValueType, NodeTemplate, UserSta
     pub node_finder: Option<NodeFinder<NodeTemplate>>,
     /// The panning of the graph viewport.
     pub pan_zoom: PanZoom,
+    /// The app zooms the view itself, the wheel too (see
+    /// [`GraphEditorState::zoom_with_wheel`]): as it must when it lays the
+    /// editor out at one zoom and draws it at another
+    #[cfg_attr(feature = "persistence", serde(skip))]
+    pub app_zooms: bool,
     pub _user_state: PhantomData<fn() -> UserState>,
 }
 
@@ -60,6 +65,7 @@ impl<NodeData, DataType, ValueType, NodeKind, UserState> Default
             node_positions: Default::default(),
             node_finder: Default::default(),
             pan_zoom: Default::default(),
+            app_zooms: false,
             _user_state: Default::default(),
         }
     }
